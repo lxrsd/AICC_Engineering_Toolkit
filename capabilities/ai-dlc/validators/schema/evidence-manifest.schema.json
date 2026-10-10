@@ -1,0 +1,172 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aicc.example.com/schemas/evidence-manifest-v1.json",
+  "title": "AICC AI-DLC Evidence Manifest",
+  "description": "Tool-independent evidence contract (v1). Describes an AI-DLC engineering run in a form that is portable across AI coding tools (Kiro CLI, Kiro IDE, Claude Code, Cursor) and verifiable by GitHub CI over committed artifacts ONLY. It deliberately does NOT include, require, or assert protected human-approval receipts: those live in private engine state that CI cannot access and must never be fabricated or claimed by an exporter.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "tool",
+    "framework",
+    "intent",
+    "stages",
+    "tests",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Evidence contract version. Consumers reject manifests whose major version they do not understand."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC ISO-8601 timestamp (with Z suffix) when the manifest was exported."
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "surface", "adapter_version"],
+      "description": "Which AI coding tool produced the run. Tool-specific; the rest of the manifest is tool-agnostic.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "description": "AI coding environment identifier (kebab-case). The contract is OPEN: any tool id is schema-valid. Whether an id is eligible/certified is governed by the tool certification registry (docs/engineering-standard/tool-registry.json), enforced separately by CI (scripts/check_tool_registry.py). The schema deliberately does NOT hardcode a fixed tool list."
+        },
+        "surface": {
+          "type": "string",
+          "description": "Human-readable surface name, e.g. 'Kiro CLI 2.x'."
+        },
+        "adapter_version": {
+          "type": "string",
+          "description": "Version of the tool-specific onboarding adapter that mapped this tool's native state into the shared contract."
+        }
+      }
+    },
+    "framework": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "scope"],
+      "description": "The engineering framework the run was governed by.",
+      "properties": {
+        "name": { "type": "string", "description": "e.g. 'AI-DLC'." },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "Semantic version of the framework runtime, e.g. '2.10.0'. Governed by the framework-version policy."
+        },
+        "scope": {
+          "type": "string",
+          "description": "Workflow scope name, e.g. 'aicc-engineering-standard' or a stock scope."
+        }
+      }
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "guard_policy"],
+      "properties": {
+        "id": { "type": "string", "description": "Stable intent/record identifier, e.g. '261008-multi-ide-standard'." },
+        "title": { "type": "string" },
+        "guard_policy": {
+          "type": "string",
+          "enum": ["strict", "relaxed", "off"],
+          "description": "Change-control posture under which the run executed."
+        }
+      }
+    },
+    "stages": {
+      "type": "array",
+      "description": "One entry per workflow stage that executed or was skipped. Records outcome only; NOT a claim of human approval.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["slug", "phase", "status"],
+        "properties": {
+          "slug": { "type": "string" },
+          "phase": {
+            "type": "string",
+            "enum": ["initialization", "ideation", "inception", "construction", "operation"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["completed", "skipped", "in_progress", "not_started"]
+          },
+          "produced_artifacts": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Repo-relative paths of artifacts this stage produced."
+          }
+        }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["framework", "total", "passed", "failed", "results_path"],
+      "description": "Summary of the run's test results. Exact detail lives at results_path (a committed file).",
+      "properties": {
+        "framework": { "type": "string", "description": "Test harness used, e.g. 'python-unittest', 'pytest', 'jest'." },
+        "total": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "results_path": {
+          "type": "string",
+          "description": "Repo-relative path to the committed, machine-readable test results this summary was derived from."
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Content-addressed inventory of the committed evidence files. Each entry lets CI verify presence and integrity of exactly what was committed.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "kind"],
+        "properties": {
+          "path": { "type": "string", "description": "Repo-relative path." },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "Lowercase hex SHA-256 of the file's bytes."
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["governance", "onboarding", "design", "requirements", "test-results", "ci", "spec", "other"],
+            "description": "Classification used by the Evidence Explorer for grouping."
+          }
+        }
+      }
+    },
+    "approvals": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "OPTIONAL, DECLARED-NOT-VERIFIED. If present, this records that human approval gates were asserted by the producing tool. CI MUST treat this as an unverified, informational declaration: the authoritative approval receipts live in private engine state that CI cannot read, so CI never asserts these are cryptographically verified. Absence is valid and never a failure.",
+      "required": ["verifiable_by_ci"],
+      "properties": {
+        "verifiable_by_ci": {
+          "type": "boolean",
+          "const": false,
+          "description": "Always false. Encodes the contract's honesty rule: committed evidence cannot prove protected approval receipts."
+        },
+        "declared_gates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["stage", "declared_outcome"],
+            "properties": {
+              "stage": { "type": "string" },
+              "declared_outcome": { "type": "string", "enum": ["approved", "rejected", "revised", "not_reached"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

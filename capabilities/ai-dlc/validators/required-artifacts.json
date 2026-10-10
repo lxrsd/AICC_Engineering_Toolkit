@@ -1,0 +1,26 @@
+{
+  "_comment": "AICC Engineering Toolkit required-artifacts list. Public, Toolkit-relative paths only. Does NOT reference AICC_Unified platform, backend, or private certification evidence. Used by check_required_artifacts.py --repo-root <toolkit-root> --required this-file.",
+  "required": [
+    "capabilities/ai-dlc/methodology/00-overview.md",
+    "capabilities/ai-dlc/methodology/01-governance-policy.md",
+    "capabilities/ai-dlc/methodology/02-framework-version-policy.md",
+    "capabilities/ai-dlc/methodology/03-evidence-contract.md",
+    "capabilities/ai-dlc/methodology/04-branch-protection.md",
+    "capabilities/ai-dlc/methodology/framework-version.json",
+    "capabilities/ai-dlc/methodology/README.md",
+    "capabilities/ai-dlc/methodology/universal-onboarding.md",
+    "capabilities/ai-dlc/methodology/tool-adapter-specification.md",
+    "capabilities/ai-dlc/adapters/kiro-cli/README.md",
+    "capabilities/ai-dlc/adapters/claude-code/README.md",
+    "capabilities/ai-dlc/adapters/cursor/README.md",
+    "capabilities/ai-dlc/validators/export_evidence.py",
+    "capabilities/ai-dlc/validators/validate_evidence.py",
+    "capabilities/ai-dlc/validators/test_evidence.py",
+    "capabilities/ai-dlc/validators/schema/evidence-manifest.schema.json",
+    "capabilities/ai-dlc/validators/public-registry.json",
+    "capabilities/ai-dlc/templates/pull_request_template.md",
+    "capabilities/ai-dlc/templates/CODEOWNERS.sample",
+    "installer/install.py",
+    "README.md"
+  ]
+}

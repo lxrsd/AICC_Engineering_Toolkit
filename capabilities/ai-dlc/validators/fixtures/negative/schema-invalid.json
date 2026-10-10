@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at": "2026-10-08T07:20:00Z",
+  "tool": {
+    "id": "kiro-cli",
+    "surface": "Kiro CLI 2.x",
+    "adapter_version": "1.0.0"
+  },
+  "framework": {
+    "name": "AI-DLC",
+    "version": "2.10",
+    "scope": "aicc-engineering-standard"
+  },
+  "intent": {
+    "id": "261008-multi-ide-standard",
+    "title": "AICC Multi-IDE Engineering Standard",
+    "guard_policy": "lenient"
+  },
+  "stages": [],
+  "tests": {
+    "framework": "python-unittest",
+    "total": 3,
+    "passed": 3,
+    "results_path": "artifacts/test-results.json"
+  },
+  "artifacts": [],
+  "unexpected_extra_field": true
+}

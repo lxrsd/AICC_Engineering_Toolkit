@@ -1,0 +1,26 @@
+# AICC Multi-IDE Engineering Standard — Code Owners
+#
+# Portability note: this file uses GitHub TEAM handles (ORG/team form resolves
+# at runtime to whatever organization the repository lives in). Replace the
+# placeholder team slugs below with your organization's real teams when the
+# standard is adopted. No personal usernames or account identifiers are
+# hardcoded, so this ports cleanly to Huron's corporate GitHub.
+
+# Default owner for everything in the repo.
+*                                   @ORG/aicc-engineering-maintainers
+
+# Shared, tool-independent governance, policy, and evidence contract.
+/docs/engineering-standard/         @ORG/aicc-engineering-maintainers @ORG/aicc-governance
+/engineering-hub/evidence/          @ORG/aicc-engineering-maintainers @ORG/aicc-governance
+
+# GitHub enforcement surface (CI, CODEOWNERS, PR templates, workflows).
+/.github/                           @ORG/aicc-engineering-maintainers @ORG/aicc-platform
+
+# Branch-protection and version policy require governance sign-off.
+/docs/engineering-standard/02-framework-version-policy.md   @ORG/aicc-governance
+/docs/engineering-standard/framework-version.json           @ORG/aicc-governance
+/docs/engineering-standard/04-branch-protection.md          @ORG/aicc-platform
+
+# Tool-specific onboarding adapters are owned by the maintainers; each stays
+# separate so no shared rule depends on a single tool.
+/docs/engineering-standard/onboarding/adapters/             @ORG/aicc-engineering-maintainers

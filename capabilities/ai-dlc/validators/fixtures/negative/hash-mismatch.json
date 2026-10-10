@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at": "2026-10-08T07:20:00Z",
+  "tool": { "id": "kiro-ide", "surface": "Kiro IDE", "adapter_version": "1.0.0" },
+  "framework": { "name": "AI-DLC", "version": "2.10.0", "scope": "aicc-engineering-standard" },
+  "intent": { "id": "261008-multi-ide-standard", "title": "AICC Multi-IDE Engineering Standard", "guard_policy": "strict" },
+  "stages": [
+    { "slug": "code-generation", "phase": "construction", "status": "completed", "produced_artifacts": ["artifacts/sample-governance.md"] }
+  ],
+  "tests": { "framework": "python-unittest", "total": 1, "passed": 1, "failed": 0, "results_path": "artifacts/test-results.json" },
+  "artifacts": [
+    { "path": "artifacts/sample-governance.md", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "kind": "governance" }
+  ]
+}

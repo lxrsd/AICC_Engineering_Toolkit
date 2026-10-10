@@ -1,0 +1,36 @@
+{
+  "schema": "aicc-public-registry/v1",
+  "generated_at": "2026-10-10T06:25:37Z",
+  "source": "Derived from the authoritative AICC_Unified certification registry. Public projection: tool id, display name, certification state, qualification, and framework version only. No internal reasons, evidence, approval receipts, or paths are published.",
+  "note": "Owner-authorized pilot certifications are valid for the stated framework version and are subject to corporate CODEOWNER review on migration. CI never verifies protected approval receipts.",
+  "tools": [
+    {
+      "id": "kiro-cli",
+      "display_name": "Kiro CLI",
+      "certification_state": "CERTIFIED",
+      "qualification": "Owner-Authorized Pilot",
+      "framework_version": "2.10.0"
+    },
+    {
+      "id": "claude-code",
+      "display_name": "Claude Code",
+      "certification_state": "CERTIFIED",
+      "qualification": "Owner-Authorized Pilot",
+      "framework_version": "2.10.0"
+    },
+    {
+      "id": "kiro-ide",
+      "display_name": "Kiro IDE",
+      "certification_state": "FAILED",
+      "qualification": null,
+      "framework_version": "2.10.0"
+    },
+    {
+      "id": "cursor",
+      "display_name": "Cursor",
+      "certification_state": "PENDING",
+      "qualification": null,
+      "framework_version": "2.10.0"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+{"framework": "python-unittest", "total": 3, "passed": 3, "failed": 0, "cases": ["schema_valid", "artifact_hash_ok", "honesty_rule_ok"]}

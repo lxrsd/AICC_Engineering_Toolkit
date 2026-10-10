@@ -1,0 +1,13 @@
+{
+  "_comment": "Machine-readable companion to docs/engineering-standard/02-framework-version-policy.md. CI reads this to enforce the supported AI-DLC runtime window over committed evidence. Update via pull request only.",
+  "framework": "AI-DLC",
+  "min_supported": "2.10.0",
+  "max_supported": "2.99.99",
+  "pinned_recommended": "2.10.0",
+  "blocked": [],
+  "required_framework_files": [
+    "engineering-hub/evidence/schema/evidence-manifest.schema.json",
+    "engineering-hub/evidence/exporter/export_evidence.py",
+    "engineering-hub/evidence/exporter/validate_evidence.py"
+  ]
+}

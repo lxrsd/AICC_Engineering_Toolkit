@@ -1,0 +1,64 @@
+{
+  "_comment": "Sensitive-file exclusion policy read by scripts/check_sensitive_files.py. Three classes: secrets/credentials, private AI-DLC engine state (per-user/per-machine, never shared), and machine-local artifacts. Update via pull request only.",
+  "skip_dirs": [
+    ".git",
+    "node_modules",
+    "dist",
+    "build",
+    "out",
+    ".cache",
+    "target",
+    "__pycache__",
+    ".pytest_cache",
+    ".egg-info"
+  ],
+  "glob_patterns": [
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "id_rsa",
+    "id_rsa.*",
+    "id_ed25519",
+    "*.p12",
+    "*.pfx",
+    "*.keystore",
+    "credentials",
+    "credentials.json",
+    "*.local",
+    ".DS_Store",
+    "aidlc/.aidlc-clone-id",
+    "aidlc/.aidlc-sessions",
+    "aidlc/active-space",
+    "*.pyc"
+  ],
+  "regex_patterns": [
+    "(^|/)\\.env(\\.|$)",
+    "\\.env$",
+    "(^|/)aidlc/\\.aidlc-sessions(/|$)",
+    "(^|/)aidlc/\\.aidlc-clone-id$",
+    "(^|/)aidlc/active-space$",
+    "(^|/)aidlc/spaces/[^/]+/intents/active-intent$",
+    "(^|/)aidlc/spaces/[^/]+/intents/[^/]+/\\.aidlc-engine(/|$)",
+    "(^|/)aidlc/\\.aidlc-turn-counter$",
+    "(^|/)aidlc/\\.aidlc-readonly-latch$"
+  ],
+  "content_regex_patterns": [
+    "AKIA[0-9A-Z]{16}",
+    "aws_secret_access_key\\s*=\\s*[A-Za-z0-9/+=]{8,}",
+    "-----BEGIN [A-Z ]*PRIVATE KEY-----"
+  ],
+  "content_scan_max_bytes": 1048576,
+  "content_scan_skip_suffixes": [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".pdf",
+    ".zip",
+    ".gz",
+    ".ico",
+    ".woff",
+    ".woff2"
+  ]
+}
