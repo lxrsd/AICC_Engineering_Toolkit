@@ -29,8 +29,15 @@ FORBIDDEN_SUBSTRINGS = [
     "apps/unified-center", "apps/workbench", "backend/",   # internal platform/backend
     "published-runs",               # sensitive certification evidence
     "/Users/", "/home/",            # machine-local paths
-    "d1p32afqqmff9l", "cloudfront.net", "execute-api",  # internal infra ids
+    "execute-api",                  # internal API Gateway host
 ]
+# The PUBLIC Amplify Workbench URL (https://main.d1p32afqqmff9l.amplifyapp.com/)
+# is an APPROVED public link the README must carry (CTO requirement). It is a
+# live public site, not a secret, so the app id / cloudfront host are allowed in
+# human-facing docs. They remain forbidden in code/config via infra-id checks on
+# non-doc files below.
+DOC_FILES_SUFFIX = (".md",)
+INFRA_IDS = ["d1p32afqqmff9l", "cloudfront.net"]
 # The public registry's sanitization is verified structurally by
 # test_public_registry_is_sanitized (it must carry no `state_reason` field).
 # A bare `state_reason` field-NAME mention in governance prose or validator
@@ -76,6 +83,12 @@ class ToolkitIndependence(unittest.TestCase):
             for s in FORBIDDEN_SUBSTRINGS:
                 if s in text:
                     offenders.append(f"{p.relative_to(ROOT)}: contains path/internal token '{s}'")
+            # Infra IDs are allowed only in human-facing Markdown docs (the
+            # approved public Workbench link); forbidden in code/config.
+            if not p.name.endswith(DOC_FILES_SUFFIX):
+                for s in INFRA_IDS:
+                    if s in text:
+                        offenders.append(f"{p.relative_to(ROOT)}: infra id '{s}' in a non-doc file")
             for pat in SECRET_VALUE_PATTERNS:
                 if pat.search(text):
                     offenders.append(f"{p.relative_to(ROOT)}: matches secret-value pattern {pat.pattern!r}")
@@ -105,22 +118,31 @@ class ToolkitIndependence(unittest.TestCase):
 
     def test_installs_standalone_into_throwaway_target(self):
         with tempfile.TemporaryDirectory() as tmp:
+            proj = pathlib.Path(tmp) / "proj"
+            proj.mkdir()
             r = subprocess.run(
-                [sys.executable, str(INSTALLER), "--capability", "ai-dlc",
-                 "--tool", "kiro-cli", "--target", tmp],
+                [sys.executable, str(INSTALLER), "--tool", "kiro-cli",
+                 "--target", str(proj), "--yes", "--non-interactive"],
                 capture_output=True, text=True)
-            self.assertEqual(r.returncode, 0, r.stderr)
-            dest = pathlib.Path(tmp) / ".aicc" / "ai-dlc"
+            # The AICC standard must be installed regardless of whether the tool
+            # CLI / runtime are present (a missing CLI yields an honest BLOCKED
+            # result, exit 2 — not a crash). Files must land either way.
+            self.assertIn(r.returncode, (0, 2), r.stderr)
+            dest = proj / ".aicc" / "ai-dlc"
             self.assertTrue((dest / "methodology").is_dir())
             self.assertTrue((dest / "validators").is_dir())
             self.assertTrue((dest / "adapter").is_dir())
             self.assertIn("requires NO access to the private AICC_Unified", r.stdout)
 
-    def test_factory_ai_not_installable(self):
-        r = subprocess.run([sys.executable, str(INSTALLER), "--capability", "factory-ai", "--tool", "kiro-cli"],
-                           capture_output=True, text=True)
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("not installable", (r.stdout + r.stderr).lower())
+    def test_cursor_and_factory_are_placeholders_only(self):
+        # Neither cursor nor factory-ai is an approved install option.
+        r = subprocess.run([sys.executable, str(INSTALLER), "--list"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r"cursor\s+PENDING.*not an install option")
+        self.assertIn("placeholders only", r.stdout)
+        # cursor adapter dir exists as a placeholder (gitkeep), factory-ai has only a README
+        self.assertTrue((ROOT / "capabilities" / "ai-dlc" / "adapters" / "cursor").is_dir())
+        self.assertTrue((ROOT / "capabilities" / "factory-ai" / "README.md").is_file())
 
 
 if __name__ == "__main__":
