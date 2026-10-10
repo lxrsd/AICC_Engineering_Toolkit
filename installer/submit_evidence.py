@@ -99,14 +99,12 @@ def collect_and_validate(evidence_path: pathlib.Path, project: str) -> dict:
     return sanitized
 
 
-def _request(method: str, url: str, token: str | None, body: dict | None):
+def _request(method: str, url: str, body: dict | None):
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("accept", "application/json")
     if body is not None:
         req.add_header("content-type", "application/json")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return r.status, json.loads(r.read().decode("utf-8") or "{}")
@@ -120,15 +118,9 @@ def _request(method: str, url: str, token: str | None, body: dict | None):
         raise SubmitError(f"network error reaching {url}: {e.reason}")
 
 
-def submit(api: str, token: str | None, project: str, manifest: dict) -> dict:
-    if not token:
-        raise SubmitError("authentication required: pass --token <Cognito access token> "
-                          "(obtain it by signing in to the Workbench; this CLI uses the "
-                          "same Cognito pool). Without it the API returns 401.")
-    status, payload = _request("POST", f"{api.rstrip('/')}/api/engineer-runs", token,
+def submit(api: str, project: str, manifest: dict) -> dict:
+    status, payload = _request("POST", f"{api.rstrip('/')}/api/engineer-runs",
                                {"project": project, "manifest": manifest})
-    if status == 401:
-        raise SubmitError("authentication failed (401): token missing/expired. Re-authenticate and retry.")
     if status == 413:
         raise SubmitError("submission rejected (413): evidence too large.")
     if status in (400, 422):
@@ -138,29 +130,27 @@ def submit(api: str, token: str | None, project: str, manifest: dict) -> dict:
     return payload
 
 
-def retrieve(api: str, token: str, project: str, run_id: str) -> dict | None:
-    status, payload = _request("GET", f"{api.rstrip('/')}/api/engineer-runs/{project}/{run_id}", token, None)
+def retrieve(api: str, run_id: str) -> dict | None:
+    status, payload = _request("GET", f"{api.rstrip('/')}/api/engineer-runs/{run_id}", None)
     return payload if status == 200 else None
 
 
 def main(argv: list[str]) -> int:
-    ap = argparse.ArgumentParser(description="Submit a governed AI-DLC run to the AICC Workbench.")
+    ap = argparse.ArgumentParser(description="Submit a governed AI-DLC run to the AICC Workbench (POC, no login).")
     ap.add_argument("--project", required=True)
     ap.add_argument("--evidence", required=True, help="path to the exported evidence-manifest.json")
     ap.add_argument("--api", required=True, help="Workbench base URL (e.g. https://main.d1p32afqqmff9l.amplifyapp.com)")
-    ap.add_argument("--token", help="Cognito access token (from Workbench sign-in)")
-    ap.add_argument("--list", action="store_true", help="after submit, list your runs")
     args = ap.parse_args(argv)
 
     try:
         manifest = collect_and_validate(pathlib.Path(args.evidence), args.project)
         print(f"Validated + sanitized evidence for tool {manifest['tool']['id']} "
               f"({len(manifest.get('artifacts', []))} artifacts). Submitting...")
-        result = submit(args.api, args.token, args.project, manifest)
+        result = submit(args.api, args.project, manifest)
         run_id = result.get("run_id")
         print(f"Submitted. run_id={run_id}")
-        # Confirm retrieval (req 7): the server-derived stages come back.
-        rec = retrieve(args.api, args.token, args.project, run_id) if run_id else None
+        print(f"Open your run: {args.api.rstrip('/')}/#/runs/{run_id}")
+        rec = retrieve(args.api, run_id) if run_id else None
         if rec:
             print("Retrieved your run. Server-derived stage status:")
             for stage, st in (rec.get("stages") or {}).items():

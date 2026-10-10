@@ -77,24 +77,18 @@ class CollectValidateSanitize(unittest.TestCase):
 
 
 class ContractAndErrors(unittest.TestCase):
-    def test_submit_without_token_raises_auth(self):
-        with self.assertRaises(se.SubmitError) as e:
-            se.submit("https://example.test", None, "myapp", synthetic_manifest())
-        self.assertIn("authentication required", str(e.exception).lower())
-
     def test_submit_maps_server_rejections(self):
-        # Stub _request to simulate server responses.
         orig = se._request
         try:
-            se._request = lambda m, u, t, b: (401, {"error": "unauthorized"})
-            with self.assertRaises(se.SubmitError) as e:
-                se.submit("https://x", "tok", "p", synthetic_manifest())
-            self.assertIn("401", str(e.exception))
-            se._request = lambda m, u, t, b: (422, {"error": "evidence rejected"})
+            se._request = lambda m, u, b: (422, {"error": "evidence rejected"})
             with self.assertRaises(se.SubmitError):
-                se.submit("https://x", "tok", "p", synthetic_manifest())
-            se._request = lambda m, u, t, b: (201, {"run_id": "r1", "stages": {}})
-            self.assertEqual(se.submit("https://x", "tok", "p", synthetic_manifest())["run_id"], "r1")
+                se.submit("https://x", "p", synthetic_manifest())
+            se._request = lambda m, u, b: (413, {"error": "too large"})
+            with self.assertRaises(se.SubmitError) as e:
+                se.submit("https://x", "p", synthetic_manifest())
+            self.assertIn("413", str(e.exception))
+            se._request = lambda m, u, b: (201, {"run_id": "RunId0123456789abcdef0", "url": "/#/runs/x"})
+            self.assertEqual(se.submit("https://x", "p", synthetic_manifest())["run_id"], "RunId0123456789abcdef0")
         finally:
             se._request = orig
 
