@@ -58,7 +58,7 @@ SECRET_VALUE_PATTERNS = [
 DETECTOR_FILES = {
     "check_sensitive_files.py", "sensitive-file-patterns.json",
     "test_evidence.py", "test_independence.py", "publish_showcase.py",
-    "export_public_registry.py", "check_tool_registry.py",
+    "export_public_registry.py", "check_tool_registry.py", "submit_evidence.py", "test_submit_evidence.py",
 }
 # Files that must NOT exist anywhere in the Toolkit.
 FORBIDDEN_PATHS = ["tool-registry.json"]  # the AUTHORITATIVE registry (public-registry.json is fine)
