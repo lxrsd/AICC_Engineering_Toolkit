@@ -35,17 +35,29 @@ Stdlib only. Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import platform
 import shutil
 import subprocess
 import sys
+import uuid
+import webbrowser
 import pathlib
+
+import workbench_register as wr
 
 TOOLKIT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 AI_DLC = TOOLKIT_ROOT / "capabilities" / "ai-dlc"
 PUBLIC_REGISTRY = AI_DLC / "validators" / "public-registry.json"
+
+# Project-local AICC config file (per the engineer's own project; portable).
+AICC_CONFIG_REL = pathlib.Path(".aicc") / "config.json"
+# Workbench API base: NOT hardcoded here (independence). Read from the
+# environment or the --workbench-api flag; the public live host is named only in
+# README.md. Empty default => registration honestly reports NOT_CONNECTED.
+WORKBENCH_API_ENV = "AICC_WORKBENCH_API"
 
 TOOL_HARNESS = {"kiro-cli": "kiro", "claude-code": "claude"}
 TOOL_CLI = {"kiro-cli": "kiro-cli", "claude-code": "claude"}
@@ -236,8 +248,123 @@ def apply_aicc_standard(target: pathlib.Path, tool: str, force: bool, dry_run: b
     return done
 
 
+def _now_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_project_config(target: pathlib.Path) -> dict:
+    """Read the project-local AICC config, or {} if absent/unreadable."""
+    cfg_path = target / AICC_CONFIG_REL
+    if not cfg_path.exists():
+        return {}
+    try:
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def ensure_project_identity(target: pathlib.Path, tool: str, harness: str, dry_run: bool) -> dict:
+    """Generate (or reuse) a stable local project identity and persist it.
+
+    - Reuses an existing local_project_id on repeated installations.
+    - Merges into any existing config.json; never clobbers it.
+    - Writes nothing in dry-run.
+    Returns the (in-memory) config dict reflecting the identity.
+    """
+    cfg = load_project_config(target)
+
+    # Stable local id: generate once, reuse forever.
+    if not cfg.get("local_project_id"):
+        cfg["local_project_id"] = uuid.uuid4().hex
+        cfg.setdefault("created_at", _now_iso())
+    cfg["tool"] = tool
+    cfg["harness"] = harness
+    cfg["updated_at"] = _now_iso()
+    cfg.setdefault("schema_version", "1.0.0")
+    # Workbench connection scaffold (filled by registration).
+    wb = cfg.get("workbench")
+    if not isinstance(wb, dict):
+        wb = {}
+    wb.setdefault("status", wr.STATUS_NOT_CONNECTED)
+    cfg["workbench"] = wb
+
+    if not dry_run:
+        save_project_config(target, cfg)
+    return cfg
+
+
+def save_project_config(target: pathlib.Path, cfg: dict) -> None:
+    cfg_path = target / AICC_CONFIG_REL
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def register_with_workbench(target: pathlib.Path, cfg: dict, tool: str, harness: str,
+                            api: str, dry_run: bool) -> tuple[str, str]:
+    """Attempt project registration against the Workbench contract.
+
+    Returns (status, message). NEVER fabricates success: a missing/undeployed
+    backend yields NOT_CONNECTED; a reachable-but-bad server yields FAILED. On
+    genuine success the server-issued project_id / workbench_url / pending
+    stages are persisted into cfg['workbench'].
+    """
+    if not api:
+        cfg["workbench"]["status"] = wr.STATUS_NOT_CONNECTED
+        if not dry_run:
+            save_project_config(target, cfg)
+        return (wr.STATUS_NOT_CONNECTED,
+                "no Workbench API configured (set --workbench-api or $%s). "
+                "The registration backend ships in a separate phase (private AICC_Unified)."
+                % WORKBENCH_API_ENV)
+    if dry_run:
+        return (wr.STATUS_NOT_CONNECTED, f"DRY-RUN: would POST registration to {api}{wr.REGISTER_PATH}")
+
+    try:
+        result = wr.register_project(api, cfg["local_project_id"], tool, harness)
+    except wr.RegisterError as exc:
+        cfg["workbench"] = {
+            "status": exc.status,
+            "api": api,
+            "last_error": str(exc),
+            "checked_at": _now_iso(),
+        }
+        save_project_config(target, cfg)
+        return (exc.status, str(exc))
+
+    cfg["workbench"] = {
+        "status": wr.STATUS_REGISTERED,
+        "api": api,
+        "project_id": result["project_id"],
+        "workbench_url": result["workbench_url"],
+        "stages": result["stages"],
+        "registered_at": _now_iso(),
+    }
+    save_project_config(target, cfg)
+    return (wr.STATUS_REGISTERED, f"registered as project {result['project_id']}")
+
+
+def maybe_open_browser(url: str, open_browser: bool) -> str:
+    """Open the engineer's OWN project URL in the default browser when allowed.
+
+    Only ever called with a server-returned per-project URL from a SUCCESSFUL
+    registration — never the certified showcase. Guarded for headless envs.
+    """
+    if not open_browser:
+        return "browser open suppressed (--no-browser / non-interactive / dry-run)"
+    if not url:
+        return "no project URL to open"
+    try:
+        if webbrowser.open(url):
+            return f"opened {url} in your default browser"
+        return f"could not open a browser automatically; open your project manually: {url}"
+    except Exception as exc:
+        return f"could not open a browser ({exc}); open your project manually: {url}"
+
+
 def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: bool,
-            allow_runtime_install: bool, force: bool, dry_run: bool) -> int:
+            allow_runtime_install: bool, force: bool, dry_run: bool,
+            workbench_api: str, open_browser: bool) -> int:
     reg = load_registry()
     cert = certified(reg)
     plat = detect_platform()
@@ -300,6 +427,29 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
                            capture_output=True, text=True, cwd=str(val / "exporter"))
         validation["evidence_contract"] = "PASS" if rv.returncode == 0 else "FAIL"
 
+    # Project identity (stable local id, reused on re-install) + config.json
+    reused = bool(load_project_config(target).get("local_project_id"))
+    cfg = ensure_project_identity(target, tool, harness, dry_run)
+    print(f"\nProject identity: local_project_id={cfg['local_project_id']} "
+          f"({'reused from existing config' if reused else 'newly generated'})"
+          f"{' (dry-run: not written)' if dry_run else ''}")
+
+    # Workbench registration (honest; never fabricated)
+    wb_status, wb_msg = register_with_workbench(target, cfg, tool, harness, workbench_api, dry_run)
+    print(f"Workbench registration: {wb_status} — {wb_msg}")
+
+    # Automatic Workbench opening — ONLY on a genuine registration success, and
+    # ONLY the server-returned per-project URL (never our certified showcase).
+    browser_msg = None
+    if wb_status == wr.STATUS_REGISTERED:
+        url = cfg.get("workbench", {}).get("workbench_url", "")
+        browser_msg = maybe_open_browser(url, open_browser and not dry_run)
+        print(f"Workbench: {browser_msg}")
+        print("Your six lifecycle stages (Requirements, Design, Approval, Code, Tests, Evidence) "
+              "start as PENDING and update as you submit evidence.")
+        print(f"Next: open {tool.replace('-', ' ')} ("
+              f"{'claude' if harness == 'claude' else 'kiro-cli chat'}) and describe the application you want to build.")
+
     # Report
     ready = rt_ready and tool_present
     print("\n== Setup report ==")
@@ -313,6 +463,14 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
     print(f"                     (verify: `aidlc doctor`, and `preflight.py --tool {tool} --require-human-turn`)")
     print(f"  Validation:        {validation or '(dry-run or runtime missing)'}")
     print(f"  Preserved configs: {existing or 'none found'}")
+    print(f"  Project id:        {cfg['local_project_id']} (stable, reused on re-install)")
+    print(f"  Project config:    {target / AICC_CONFIG_REL}")
+    if wb_status == wr.STATUS_REGISTERED:
+        print(f"  Workbench:         READY — {cfg['workbench']['workbench_url']}")
+    else:
+        print(f"  Workbench:         {wb_status} ({wb_msg.splitlines()[0]})")
+        print(f"                     Local setup is unaffected; registration will succeed once the")
+        print(f"                     backend endpoint is deployed (separate AICC_Unified phase).")
     print("\n  Start a governed project: open your tool's interactive AI-DLC agent and run /aidlc.")
     print("  This toolkit requires NO access to the private AICC_Unified repository.")
     return 0 if ready else 2
@@ -327,6 +485,11 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--non-interactive", action="store_true", help="never prompt; fail closed on decisions")
     ap.add_argument("--allow-runtime-install", action="store_true",
                     help="permit running the official AWS Labs runtime installer if missing")
+    ap.add_argument("--workbench-api", default=os.environ.get(WORKBENCH_API_ENV, ""),
+                    help=f"Workbench API base URL for project registration (or set ${WORKBENCH_API_ENV}). "
+                         "If unset, registration reports NOT_CONNECTED (no fabricated URL).")
+    ap.add_argument("--no-browser", action="store_true",
+                    help="do not open the Workbench URL in a browser (headless / automation)")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
@@ -346,7 +509,10 @@ def main(argv: list[str]) -> int:
     if target == TOOLKIT_ROOT:
         print("Refusing to target the Toolkit repo itself; pass --target <your-project-dir>.", file=sys.stderr)
         return 2
-    return install(tool, target, args.yes, args.non_interactive, args.allow_runtime_install, args.force, args.dry_run)
+    # Browser opening is suppressed for headless/automation modes.
+    open_browser = not (args.no_browser or args.non_interactive or args.dry_run)
+    return install(tool, target, args.yes, args.non_interactive, args.allow_runtime_install,
+                   args.force, args.dry_run, args.workbench_api, open_browser)
 
 
 if __name__ == "__main__":

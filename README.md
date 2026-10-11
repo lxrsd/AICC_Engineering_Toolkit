@@ -38,6 +38,104 @@ or **Kiro CLI**.
 
 ---
 
+## 🚀 Start Building with AI-DLC
+
+New here? This is the whole journey in plain language — from downloading the
+Toolkit to watching your own project Workbench open.
+
+### What AI-DLC does
+
+AI-DLC (AI-Driven Development Life Cycle) is a **governed** way to build software
+with an AI coding tool. Instead of letting the AI write code unchecked, it walks
+your idea through six clear stages — **Requirements → Design → Approval → Code →
+Tests → Evidence** — and makes a **real human approve the plan** before any code
+is generated. You get speed *and* control.
+
+### Why engineers use the AICC standard
+
+- **One consistent lifecycle** for every project and every teammate — no bespoke
+  prompting rituals.
+- **A human approval gate** that can't be faked, so AI never ships code nobody
+  signed off on.
+- **Evidence for every run** — requirements, design, tests, and artifacts are
+  traceable, which is what makes a run *certifiable*.
+
+### 1. Install the Toolkit
+
+Clone this repo, then run the one-command setup, pointed at **your own project
+folder**. One command per OS — nothing else to invent:
+
+| Your OS | Command (run from the cloned `AICC_Engineering_Toolkit` folder) |
+|---------|-----------------------------------------------------------------|
+| **Windows** (PowerShell) | `py installer\install.py --target C:\path\to\your\project` |
+| **macOS** | `python3 installer/install.py --target /path/to/your/project` |
+| **Linux** (incl. WSL2) | `python3 installer/install.py --target /path/to/your/project` |
+
+### 2. Choose your AI tool
+
+The installer detects or asks for **Claude Code** or **Kiro CLI** — the two
+certified tools. Pass `--tool claude-code` or `--tool kiro-cli` to skip the
+prompt. Your existing agents, skills, hooks, and `CLAUDE.md` / `AGENTS.md` are
+**preserved**, never overwritten.
+
+### 3. Your personal Workbench opens automatically
+
+During setup the Toolkit gives your project a **stable local identity** and
+registers it with the AICC Workbench. On success it:
+
+1. saves your personal project URL into `.aicc/config.json`,
+2. **opens that URL in your browser automatically**, and
+3. shows your **six lifecycle stages starting as _pending_**.
+
+This is **your own project** — not our certified demo (see
+[the distinction below](#two-things-you-can-open)). Running headless or in CI?
+Add `--no-browser` and nothing will launch.
+
+> If the registration backend isn't deployed yet, the installer tells you so
+> honestly (`NOT_CONNECTED`) and **never** fabricates a project URL. Your local
+> setup still completes.
+
+### 4. Start building
+
+Open your tool and describe the app you want to build:
+
+```bash
+claude            # Claude Code      → then: /aidlc "Build <your application>"
+kiro-cli chat     # Kiro CLI         → then: /aidlc "Build <your application>"
+```
+
+**You approve the plan as a real human at the gate** — code generation is
+blocked until you do. That gate is the whole point: it's how the AICC standard
+guarantees a person, not an AI, authorized what gets built.
+
+### What the six stages mean
+
+| Stage | What it is |
+|-------|-----------|
+| **Requirements** | What the application must do, captured from your intent. |
+| **Design** | How it will be built — architecture and approach. |
+| **Approval** | The human gate: *you* approve the plan before any code is written. |
+| **Code** | The AI generates the real application code. |
+| **Tests** | The build runs and automated tests execute. |
+| **Evidence** | Traceable artifacts (paths + hashes + results) proving the run. |
+
+Each stage starts **pending**. As you complete the lifecycle and submit evidence,
+**your Workbench stages update automatically** to reflect real progress — no
+manual bookkeeping.
+
+<a id="two-things-you-can-open"></a>
+### Two things you can open — don't confuse them
+
+| | What it is | For |
+|---|-----------|-----|
+| **▶ View Certified Demonstration** | Our *existing* certified Kiro CLI and Claude Code runs on the live Workbench. Proof that the standard works. | Seeing AICC's own completed proof. |
+| **🛠 Start Building** | *Your* brand-new AI-DLC project, with its own identity and its own six pending stages. | Building your application. |
+
+The installer only ever opens **your** project. It will **never** open our
+certification showcase as if it were your run.
+
+---
+
 ## Quick Start (one command per OS)
 
 **Step 1 — get the toolkit**
@@ -102,6 +200,11 @@ irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.
 ```
 
 Non-interactive automation: add `--non-interactive --yes --tool claude-code|kiro-cli`.
+In headless / CI environments also add `--no-browser` so no browser window is
+launched. To register your project with a Workbench, pass
+`--workbench-api <base-url>` (or set `$AICC_WORKBENCH_API`); when it's omitted
+the installer completes local setup and reports the Workbench as
+`NOT_CONNECTED` rather than inventing a URL.
 
 ---
 
@@ -186,10 +289,21 @@ python3 .aicc/ai-dlc/validators/check_sensitive_files.py --repo-root .
 
 ## Workbench
 
-See a live demonstration of certified Kiro CLI and Claude Code runs on the AICC
-AI-DLC Workbench:
+### ▶ View Certified Demonstration (AICC's existing proof)
+
+A live demonstration of our **previously certified** Kiro CLI and Claude Code
+runs on the AICC AI-DLC Workbench. This is AICC's own proof that the governed
+lifecycle works end-to-end — **it is not your project**:
 
 **→ https://main.d1p32afqqmff9l.amplifyapp.com/**
+
+### 🛠 Start Building (your own project)
+
+When you run the installer against your project (see
+[Start Building with AI-DLC](#-start-building-with-ai-dlc)), the Toolkit
+registers **your** project and opens **your** personal Workbench URL — a fresh
+run with its own identity and its own six pending stages, separate from the
+certified demonstration above.
 
 ---
 
