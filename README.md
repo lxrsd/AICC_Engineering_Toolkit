@@ -4,7 +4,7 @@
 
 ### Standardize AI engineering. Accelerate delivery. Scale with confidence.
 
-**A governed AI-Driven Development Life Cycle (AI-DLC) for Claude Code and Kiro CLI — set up in one command.**
+**A governed AI-Driven Development Life Cycle (AI-DLC) for the official AWS Labs AI-DLC harnesses — automatic where your machine allows it, with an IT-approved manual path where corporate security restricts it.**
 
 [![Framework](https://img.shields.io/badge/AI--DLC-v2.10.0-5B2C86)](https://awslabs.github.io/aidlc-workflows/)
 [![Runtime](https://img.shields.io/badge/runtime-AWS%20Labs%20aidlc--workflows-FF9900)](https://github.com/awslabs/aidlc-workflows)
@@ -36,6 +36,84 @@ or **Kiro CLI**.
 > uses AWS Labs' own official installer so you always get an authentic, signed
 > build.
 
+> **Honest expectation setting.** On a corporate-managed machine (e.g. Huron
+> Windows with Netskope SSL inspection), fully automatic installation **cannot
+> be guaranteed** — security policy may block script execution, downloads, or
+> PATH changes. This Toolkit supports **both** an automatic path *where
+> permitted* and an **IT-approved manual path** where it is not. The per-project
+> AI-DLC configuration is local and does not depend on AWS.
+
+---
+
+## Engineer Quick Start
+
+**Two one-time prerequisites (per machine), then per-project setup.**
+
+1. **Install the official AI-DLC runtime once** (`aidlc`). Automatic where
+   permitted, or [manual/IT-approved](#corporate-managed-windows-installation).
+   Verify: `aidlc version` → `2.10.0`+.
+2. **Have your AI tool** (Claude Code or Kiro CLI) installed — by you or via IT
+   approval. The Toolkit does **not** install your editor/tool for you.
+3. **Configure your project** (local, no AWS):
+   ```bash
+   # macOS / Linux
+   python3 installer/install.py --target /path/to/your/project --harness claude
+   # Windows PowerShell
+   py installer\install.py --target "C:\path\to\your project" --harness claude
+   ```
+   Use `--harness kiro` for Kiro CLI. See all seven with
+   `python3 installer/install.py --list-harnesses`.
+4. **Start building.** Open your tool and run `/aidlc` (Codex uses `$aidlc`):
+   describe the app; AI-DLC walks Requirements → Design → **human Approval** →
+   Code → Tests → Evidence.
+
+**AWS Workbench is optional and OFF by default.** Local AI-DLC needs no AWS
+connectivity. To use the Workbench, add `--register-workbench` (or
+`--workbench-api <url>` / `$AICC_WORKBENCH_API`).
+
+---
+
+<a id="corporate-managed-windows-installation"></a>
+## Corporate-Managed Windows Installation
+
+Real Huron Windows acceptance showed that managed devices can block automatic
+installation. Here are the blockers we actually hit and the supported, secure
+way through each. **None of these weakens security** — no TLS bypass, no
+disabling OneDrive, no admin requirement, no unverified executables.
+
+| Blocker | What you see | Supported remedy |
+|---------|--------------|------------------|
+| **PowerShell execution policy** | scripts refuse to run | Launch per-process: `powershell -ExecutionPolicy Bypass -File bootstrap\bootstrap.ps1 ...` (scoped to that process only; does not change machine policy). If still blocked, use the manual runtime install below and run `install.py` directly. |
+| **Netskope SSL inspection / revocation** | `CERTIFICATE_VERIFY_FAILED: CA cert does not include key usage extension`, or CRL/OCSP warnings | Ask IT to re-issue the inspection CA with `keyUsage=critical,keyCertSign,cRLSign` (the proper fix). As a stopgap for *Workbench* calls only, `install.py --register-workbench --allow-legacy-tls-keyusage` relaxes **only** the strict Key-Usage check while keeping chain + hostname verification. Local setup needs no network and is unaffected. |
+| **Corporate network restrictions / proxy** | downloads fail / time out | Set `HTTPS_PROXY`/`HTTP_PROXY`, or do the **manual offline runtime install** below. Per-project `install.py` needs no network. |
+| **Windows PATH not refreshed** | `aidlc`/`claude` "not found" right after install | Open a **new** terminal, or let the Toolkit find it — detection also searches `%USERPROFILE%\.local\bin` and the runtime's install dirs, so `claude.exe` / `aidlc.exe` are found even off-PATH. |
+| **OneDrive-managed project directory** | `PermissionError [WinError 5]` on files under `OneDrive - <org>` | Fixed: the installer never recursively deletes config dirs; it syncs files in place and clears read-only bits. Keep quotes around spaced paths. |
+
+### Manual, IT-approved runtime install (offline-capable)
+
+When the automatic installer is blocked, install the official runtime manually
+from AWS Labs releases — **verified**, never from an unverified source:
+
+1. On a permitted machine, download the official release asset for your OS/arch
+   from `https://github.com/awslabs/aidlc-workflows/releases` plus its
+   `checksums.txt` (and SLSA provenance).
+2. **Verify SHA-256** before use:
+   ```powershell
+   # Windows PowerShell
+   (Get-FileHash -Algorithm SHA256 .\aidlc-windows-x64.exe).Hash.ToLower()
+   # compare against the value in checksums.txt
+   ```
+   ```bash
+   # macOS / Linux
+   shasum -a 256 ./aidlc-<os>-<arch>    # compare against checksums.txt
+   ```
+3. Place it in a user-scope dir on PATH (e.g. `%USERPROFILE%\.local\bin`), open a
+   new terminal, and confirm `aidlc version` ≥ 2.10.0.
+4. Run the per-project step: `py installer\install.py --target "<project>" --harness <id>`.
+
+Do **not** disable TLS verification, bypass corporate controls, or run binaries
+you have not checksum-verified.
+
 ---
 
 ## 🚀 Start Building with AI-DLC
@@ -62,13 +140,23 @@ is generated. You get speed *and* control.
 
 ### 1. Install the Toolkit — one command, fresh machine
 
-You do **not** need Python, Git, your AI tool, or the AI-DLC runtime installed
-first. The native bootstrapper detects what's missing and, with your consent,
-installs each prerequisite from its official source, then runs the full AICC
-setup. One documented entry point per OS:
+Setup has **two independent parts**, in order:
 
-| Your OS | One command (no prior setup required) |
-|---------|----------------------------------------|
+1. **One-time, per machine:** the official **AWS Labs AI-DLC runtime** (`aidlc`)
+   and your chosen **AI development tool** (Claude Code or Kiro CLI). These are
+   installed **once** and reused by every project. On a corporate-managed device
+   this step may require **IT approval or a manual install** — see
+   [Corporate-Managed Windows Installation](#corporate-managed-windows-installation).
+2. **Per project:** `installer/install.py` applies the AICC standard and
+   configures AI-DLC for your tool in your project folder. This part is **local
+   and needs no AWS connectivity**.
+
+Where your machine allows it, the native bootstrapper automates part 1 with your
+consent; otherwise you install the prerequisites manually (official releases,
+verified) and run part 2 directly. One documented entry point per OS:
+
+| Your OS | One command |
+|---------|-------------|
 | **Windows** (PowerShell) | `powershell -ExecutionPolicy Bypass -File bootstrap\bootstrap.ps1 -Target "C:\path\to\your project"` |
 | **macOS** | `bash bootstrap/bootstrap.sh --target "/path/to/your project"` |
 | **Linux** (incl. WSL2) | `bash bootstrap/bootstrap.sh --target "/path/to/your project"` |
@@ -76,22 +164,32 @@ setup. One documented entry point per OS:
 The bootstrapper:
 
 1. detects your OS + CPU and refuses unsupported combinations honestly;
-2. detects or (with your explicit **yes**) installs **Python 3**, **Git**, your
-   chosen **AI harness** (Kiro CLI *or* Claude Code), and the official **AWS
-   Labs AI-DLC runtime** — each from its official, publisher-verified source, in
-   **user scope** (no admin, no hidden elevation);
-3. then runs `installer/install.py` to apply the AICC standard, register your
-   project, and open your Workbench.
+2. detects or (**only with your explicit consent**) installs **Python 3**,
+   **Git**, your chosen **AI harness** (Kiro CLI *or* Claude Code), and the
+   official **AWS Labs AI-DLC runtime** — each from its official,
+   publisher-verified source, in **user scope** (no admin, no hidden elevation).
+   On corporate-managed machines, some of these installs may be blocked and must
+   be done manually/with IT approval first;
+3. then runs `installer/install.py` to apply the AICC standard and configure the
+   AI-DLC harness in your project.
 
 Already have the tools? It reuses them and never downgrades or overwrites them.
-Add `--dry-run` to preview every step without changing anything, `--yes` for
-unattended automation, and `--no-browser` for headless/CI. On Windows, paths
-with spaces (OneDrive-backed Desktop) are fully supported — keep the quotes.
+**AWS Workbench is optional and off by default** — nothing registers with AWS
+unless you ask (see below). Add `--dry-run` to preview every step without
+changing anything. On Windows, paths with spaces (OneDrive-backed Desktop) are
+supported — keep the quotes.
 
-> **Prefer to drive the Python installer yourself?** If Python is already
-> installed you can skip the bootstrapper and run `install.py` directly:
-> `python3 installer/install.py --target /path/to/your/project` (Windows:
-> `py installer\install.py --target C:\path\to\your\project`).
+**Bootstrapper options** (what the scripts actually accept): `--target`,
+`--harness <id>` (`-Harness` on PowerShell), `--tool` (legacy alias),
+`--no-browser`, `--ref <tag>`, `--sha256 <digest>` (`-Sha256` on PowerShell),
+`--dry-run`, and (sh) `--yes`. The bootstrappers do **not** take a
+`--workbench` flag; Workbench is an `install.py` option (below).
+
+> **Prefer to drive the Python installer yourself?** If Python + your tool +
+> the runtime are already installed, skip the bootstrapper and run `install.py`
+> directly: `python3 installer/install.py --target /path/to/your/project
+> --harness claude` (Windows: `py installer\install.py --target
+> C:\path\to\your\project --harness claude`).
 
 ### 2. Choose your AI tool — and it gets *configured*, not just installed
 
@@ -160,38 +258,52 @@ AWS Labs AI-DLC methodology for the tool you selected* in your project:
 - Runs the official runtime to build the **AI-DLC engine surface** for your
   harness (`.kiro/` for Kiro CLI, `.claude/` for Claude Code) and **verifies it
   was actually created** — it won't claim "configured" on a no-op.
-- Writes a tool-neutral **`AGENTS.md`** (the AI-DLC activation rule) plus a thin
-  **`CLAUDE.md`** that points Claude at `AGENTS.md`, and a Kiro steering pointer.
-  So **both** tools automatically discover that a build request must start the
-  governed workflow — no special prompt needed.
+- Writes a tool-neutral **`AGENTS.md`** (the AI-DLC activation instruction) plus
+  a thin **`CLAUDE.md`** that points Claude at `AGENTS.md`, and a Kiro steering
+  pointer, so each tool can **discover** that a build request should start the
+  governed workflow.
+
+> **Honest limit on "automatic activation."** Project instructions *guide* a
+> tool; the runtime's harness hooks are what *enforce* the gates. The degree of
+> automatic, no-prompt activation and approval enforcement is **verified only
+> for the harnesses marked accordingly** in `--list-harnesses` (today: Claude
+> Code and Kiro CLI are *partially* verified; the other five are **UNTESTED** on
+> a real machine). We do **not** promise universal natural-language activation
+> or approval enforcement for every harness.
 
 **Switching tools later is supported and non-destructive.** Re-run the installer
-with the other `--tool`: it configures that harness and leaves the first one's
-configuration intact (both can coexist in one project where the runtime supports
-it). Your project identity is reused — no framework files to rebuild by hand.
+with the other `--harness`: it configures that harness and leaves the first
+one's configuration intact (`kiro`, `kiro-ide`, `codex`, `cursor`, `opencode`
+can coexist; GitHub Copilot's root block is exclusive). Your project identity is
+reused — no framework files to rebuild by hand.
 
-> **What "configured" means in practice:** open the project in Claude Code or
-> Kiro CLI and type only *"Build me an Expense Tracker web application."* The
-> tool starts the official AI-DLC process — **Requirements → Design → human Plan
-> Approval → Code → Tests → Evidence** — instead of writing application code
-> straight away. The approval checkpoint is a real human gate.
+> **What "configured" means in practice:** on a verified harness (Claude Code,
+> Kiro CLI), open the project and type *"Build me an Expense Tracker web
+> application."* — the tool should start the official AI-DLC process
+> (**Requirements → Design → human Plan Approval → Code → Tests → Evidence**)
+> rather than writing code immediately. Confirm this per harness on your machine.
 
-### 3. Your personal Workbench opens automatically
+### 3. (Optional) Workbench — off by default
 
-During setup the Toolkit gives your project a **stable local identity** and
-registers it with the AICC Workbench. On success it:
+Local AI-DLC is complete without AWS. The Workbench is **entirely optional** and
+**not** part of the default setup — nothing contacts AWS unless you opt in with
+`--register-workbench` (or `--workbench-api <url>` / `$AICC_WORKBENCH_API`).
+
+When you opt in, the Toolkit gives your project a **stable local identity**,
+registers it, and on success:
 
 1. saves your personal project URL into `.aicc/config.json`,
-2. **opens that URL in your browser automatically**, and
+2. opens that URL in your browser (skip with `--no-browser`), and
 3. shows your **six lifecycle stages starting as _pending_**.
 
 This is **your own project** — not our certified demo (see
-[the distinction below](#two-things-you-can-open)). Running headless or in CI?
-Add `--no-browser` and nothing will launch.
+[the distinction below](#two-things-you-can-open)).
 
-> If the registration backend isn't deployed yet, the installer tells you so
-> honestly (`NOT_CONNECTED`) and **never** fabricates a project URL. Your local
-> setup still completes.
+> Registration is honest: on any failure (unreachable backend, corporate TLS,
+> etc.) the installer reports `NOT_CONNECTED`/`FAILED`, **never** fabricates a
+> project URL, and your **local setup still completes**. Re-run with
+> `--register-workbench` to retry — your stable project id is reused, so no
+> duplicate project is created.
 
 ### 4. Start building
 
@@ -217,12 +329,13 @@ guarantees a person, not an AI, authorized what gets built.
 | **Tests** | The build runs and automated tests execute. |
 | **Evidence** | Traceable artifacts (paths + hashes + results) proving the run. |
 
-Each stage starts **pending**. As you work through the lifecycle in your AI
-tool, **your Workbench stages update automatically** — the Toolkit installs a
-sync hook that pushes validated progress after each turn. There is **no manual
-evidence upload, no run id to copy, no AWS setup, and no AICC login**. A stage
-turns complete only when the backend validates genuine evidence: the human
-approval gate must be real, and failed tests never show complete.
+These six stages are the local AI-DLC lifecycle your tool runs — **no AWS
+required**. *If* you opt into the Workbench (`--register-workbench`), the Toolkit
+also installs a sync hook that pushes validated progress so the Workbench's
+stages update automatically, with no manual evidence upload or AICC login; a
+stage turns complete only when the backend validates genuine evidence (the human
+approval gate must be real, and failed tests never show complete). Without the
+Workbench, the same lifecycle still runs locally in your tool.
 
 <a id="two-things-you-can-open"></a>
 ### Two things you can open — don't confuse them
@@ -400,20 +513,31 @@ lifecycle works end-to-end — **it is not your project**:
 
 ### 🛠 Start Building (your own project)
 
-When you run the installer against your project (see
-[Start Building with AI-DLC](#-start-building-with-ai-dlc)), the Toolkit
-registers **your** project and opens **your** personal Workbench URL — a fresh
-run with its own identity and its own six pending stages, separate from the
-certified demonstration above.
+The Workbench is **optional**. If you opt in (`--register-workbench`), the
+Toolkit registers **your** project and opens **your** personal Workbench URL — a
+fresh run with its own identity and its own six pending stages, separate from
+the certified demonstration above. Without it, AI-DLC runs fully locally in your
+tool with no AWS connectivity.
 
 ---
 
 ## Prerequisites
 
+One-time, per machine (reused by every project):
+
+- **The official AI-DLC runtime** (`aidlc`) — **mandatory**. Install it once
+  (automatic where permitted, or
+  [manual/IT-approved](#corporate-managed-windows-installation)); verify with
+  `aidlc version` → `2.10.0`+.
+- **Your AI tool** — Claude Code (`claude`) or Kiro CLI (`kiro-cli`), installed
+  by you or via **IT approval**. The Toolkit does not install your tool for you.
 - **Python 3.9+** (for the installer and validators).
-- **Your AI tool**: Claude Code (`claude`) or Kiro CLI (`kiro-cli`), installed from its vendor.
-- **The AI-DLC runtime** (`aidlc`): installed by the Quick Start, or already on your PATH (`aidlc version` → 2.10.0+).
-- Supported OS/CPU per the AWS Labs runtime: macOS (arm64/x64), Linux (arm64/x64, incl. musl), Windows (x64). On Windows, use PowerShell for the runtime installer, or WSL2 with the Linux command.
+- Supported OS/CPU per the AWS Labs runtime: macOS (arm64/x64), Linux
+  (arm64/x64, incl. musl), Windows (x64). On Windows use PowerShell for the
+  runtime installer, or WSL2 with the Linux command.
+
+**Not required:** AWS connectivity or an AWS Workbench account — the Workbench is
+optional and off by default.
 
 ## Troubleshooting
 
@@ -425,6 +549,12 @@ certified demonstration above.
 | Approvals are refused | That is the control working. Launch the **interactive** agent (`claude` / `kiro-cli chat`) so a real `HUMAN_TURN` is recorded; don't drive the engine from a non-interactive shell. |
 | Windows: `install.sh` fails in PowerShell | Use the PowerShell command (`irm … install.ps1 | iex`) or WSL2 with the Linux command. |
 | `aidlc doctor` reports problems | Follow its suggested fixes; re-run the installer with `--force` to refresh the AICC standard. |
+| PowerShell: *"running scripts is disabled"* | Launch per-process: `powershell -ExecutionPolicy Bypass -File bootstrap\bootstrap.ps1 ...` (scoped; no machine-policy change). If still blocked, do the manual runtime install and run `install.py` directly. |
+| `CERTIFICATE_VERIFY_FAILED: CA cert does not include key usage extension` (Netskope) | A corporate SSL-inspection CA lacks a required extension. Proper fix: IT re-issues the CA with `keyUsage=critical,keyCertSign,cRLSign`. Stopgap for Workbench calls only: `--register-workbench --allow-legacy-tls-keyusage` (keeps chain + hostname checks). Local setup is unaffected. |
+| `PermissionError [WinError 5]` under `OneDrive - <org>` | Fixed — the installer no longer recursively deletes config dirs and clears read-only bits. Keep quotes around spaced paths; re-run. |
+| `claude`/`aidlc` "not found" right after install | PATH not refreshed: open a new terminal. Detection also searches `%USERPROFILE%\.local\bin`, so a fresh install is usually found anyway. |
+
+See [Corporate-Managed Windows Installation](#corporate-managed-windows-installation) for the full blocker-by-blocker guide.
 
 ## Scope & honesty
 

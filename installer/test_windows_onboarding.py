@@ -61,7 +61,8 @@ def _fast_subprocess_run(cmd, *a, **k):
 
 
 def _run_install(target, *, dry_run=False, api="https://wb.example", source="flag",
-                 open_browser=False, allow_runtime_install=False, tool="kiro-cli"):
+                 open_browser=False, allow_runtime_install=False, tool="kiro-cli",
+                 register_workbench=False):
     buf = io.StringIO()
     # Make the runtime look present+compatible and stub the external commands so
     # the test never shells out to a real aidlc / validator (fast + portable).
@@ -74,7 +75,7 @@ def _run_install(target, *, dry_run=False, api="https://wb.example", source="fla
             rc = install.install(tool, target, assume_yes=True, non_interactive=True,
                                  allow_runtime_install=allow_runtime_install, force=False,
                                  dry_run=dry_run, workbench_api=api, api_source=source,
-                                 open_browser=open_browser)
+                                 open_browser=open_browser, register_workbench=register_workbench)
     return rc, buf.getvalue()
 
 
@@ -234,7 +235,7 @@ class RegistrationThroughInstaller(unittest.TestCase):
         try:
             with _patched(webbrowser=type("W", (), {"open": staticmethod(lambda u: opened.append(u) or True)})):
                 target = _spaced_project()
-                rc, out = _run_install(target, open_browser=True)
+                rc, out = _run_install(target, open_browser=True, register_workbench=True)
             cfg = json.loads((target / ".aicc" / "config.json").read_text())
         finally:
             wr._request = orig_req
@@ -251,14 +252,14 @@ class RegistrationThroughInstaller(unittest.TestCase):
             # First attempt: network error -> NOT_CONNECTED, id persisted.
             wr._request = lambda m, u, b: (_ for _ in ()).throw(
                 wr.RegisterError("cannot reach host", wr.STATUS_NOT_CONNECTED))
-            _run_install(target)
+            _run_install(target, register_workbench=True)
             cfg1 = json.loads((target / ".aicc" / "config.json").read_text())
             self.assertEqual(cfg1["workbench"]["status"], "NOT_CONNECTED")
             id1 = cfg1["local_project_id"]
             # Retry: backend now up -> REGISTERED, SAME local id (no duplicate).
             ok = dict(self.OK)
             wr._request = lambda m, u, b: (201, ok)
-            _run_install(target)
+            _run_install(target, register_workbench=True)
             cfg2 = json.loads((target / ".aicc" / "config.json").read_text())
         finally:
             wr._request = orig_req
@@ -272,7 +273,7 @@ class RegistrationThroughInstaller(unittest.TestCase):
         try:
             with _patched(webbrowser=type("W", (), {"open": staticmethod(lambda u: opened.append(u) or True)})):
                 target = _spaced_project()
-                _run_install(target, open_browser=True)
+                _run_install(target, open_browser=True, register_workbench=True)
             cfg = json.loads((target / ".aicc" / "config.json").read_text())
         finally:
             wr._request = orig_req
@@ -460,6 +461,51 @@ class NonDestructiveApply(unittest.TestCase):
         self.assertTrue(any("SKIPPED" in line for line in out),
                         f"expected a SKIPPED note, got: {out}")
         shutil.rmtree(proj.parent, ignore_errors=True)
+
+
+# ----------------------------------------------------------------------------
+# Workbench is OPTIONAL and OFF by default (local AI-DLC needs no AWS).
+# ----------------------------------------------------------------------------
+class WorkbenchOptional(unittest.TestCase):
+    def test_default_install_does_not_register_or_touch_network(self):
+        called = []
+        orig_req = wr._request
+        wr._request = lambda m, u, b: called.append(1) or (201, {})
+        try:
+            target = _spaced_project()
+            # No register_workbench -> must NOT call the registration endpoint.
+            rc, out = _run_install(target)   # register_workbench defaults False
+            cfg = json.loads((target / ".aicc" / "config.json").read_text())
+        finally:
+            wr._request = orig_req
+        self.assertEqual(called, [], "default install must not contact the Workbench")
+        self.assertIn("DISABLED", out)
+        self.assertIn("no AWS", out)
+        # Local setup still completed: identity + harness activation present.
+        self.assertTrue(cfg.get("local_project_id"))
+        self.assertEqual(cfg["workbench"]["status"], "NOT_CONNECTED")
+
+    def test_local_aidlc_files_written_without_workbench(self):
+        target = _spaced_project()
+        _run_install(target)   # default: no Workbench
+        self.assertTrue((target / "AGENTS.md").exists())
+        self.assertTrue((target / "CLAUDE.md").exists())
+        self.assertTrue((target / ".aicc" / "ai-dlc" / "methodology").is_dir())
+
+    def test_opt_in_registers(self):
+        called = []
+        orig_req = wr._request
+        wr._request = lambda m, u, b: called.append(1) or (201, {
+            "project_id": "P1", "workbench_url": "https://wb.example/#/projects/P1",
+            "stages": [{"slug": s, "status": "pending"} for s in wr.EXPECTED_STAGES]})
+        try:
+            target = _spaced_project()
+            _run_install(target, register_workbench=True)
+            cfg = json.loads((target / ".aicc" / "config.json").read_text())
+        finally:
+            wr._request = orig_req
+        self.assertEqual(len(called), 1, "opt-in must contact the Workbench exactly once")
+        self.assertEqual(cfg["workbench"]["status"], "REGISTERED")
 
 
 if __name__ == "__main__":

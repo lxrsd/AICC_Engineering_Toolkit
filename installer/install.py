@@ -732,7 +732,7 @@ def maybe_open_browser(url: str, open_browser: bool) -> str:
 def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: bool,
             allow_runtime_install: bool, force: bool, dry_run: bool,
             workbench_api: str, api_source: str, open_browser: bool,
-            relax_tls_keyusage: bool = False) -> int:
+            relax_tls_keyusage: bool = False, register_workbench: bool = False) -> int:
     reg = load_registry()
     cert = certified(reg)
     plat = detect_platform()
@@ -858,17 +858,25 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
           f"({'reused from existing config' if reused else 'newly generated'})"
           f"{' (dry-run: not written)' if dry_run else ''}")
 
-    # Workbench registration (honest; never fabricated). The endpoint is the
-    # maintained default unless overridden by --workbench-api / env.
-    print(f"Workbench endpoint: {workbench_api or '(none)'} (source: {api_source})")
-    # Apply the TLS policy (full verification always; opt-in Key Usage relax).
-    wr.set_tls_policy(relax_tls_keyusage)
-    if relax_tls_keyusage:
-        print("Workbench TLS: strict X.509 Key Usage check RELAXED by request "
-              "(chain + hostname verification remain enforced).")
-    wb_status, wb_msg = register_with_workbench(target, cfg, tool, harness,
-                                                workbench_api, api_source, dry_run)
-    print(f"Workbench registration: {wb_status} — {wb_msg}")
+    # Workbench is OPTIONAL and OFF by default. Local AI-DLC setup (standard,
+    # activation, harness config) is complete at this point and requires NO AWS
+    # connectivity. Registration runs ONLY when the engineer opts in
+    # (--register-workbench, or by providing --workbench-api / $AICC_WORKBENCH_API).
+    if not register_workbench:
+        wb_status, wb_msg = "DISABLED", ("Workbench not configured (optional; off by default). "
+                                         "Local AI-DLC needs no AWS connectivity. To use it, re-run with "
+                                         "--register-workbench (or --workbench-api <url>).")
+        print(f"Workbench: {wb_status} — {wb_msg}")
+    else:
+        print(f"Workbench endpoint: {workbench_api or '(none)'} (source: {api_source})")
+        # Apply the TLS policy (full verification always; opt-in Key Usage relax).
+        wr.set_tls_policy(relax_tls_keyusage)
+        if relax_tls_keyusage:
+            print("Workbench TLS: strict X.509 Key Usage check RELAXED by request "
+                  "(chain + hostname verification remain enforced).")
+        wb_status, wb_msg = register_with_workbench(target, cfg, tool, harness,
+                                                    workbench_api, api_source, dry_run)
+        print(f"Workbench registration: {wb_status} — {wb_msg}")
 
     # Automatic Workbench opening — ONLY on a genuine registration success, and
     # ONLY the server-returned per-project URL (never our certified showcase).
@@ -908,13 +916,16 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
     print(f"  Preserved configs: {existing or 'none found'}")
     print(f"  Project id:        {cfg['local_project_id']} (stable, reused on re-install)")
     print(f"  Project config:    {target / AICC_CONFIG_REL}")
-    if wb_status == wr.STATUS_REGISTERED:
+    if not register_workbench:
+        print(f"  Workbench:         DISABLED (optional; off by default — local AI-DLC needs no AWS)")
+        print(f"                     enable later with --register-workbench")
+    elif wb_status == wr.STATUS_REGISTERED:
         print(f"  Workbench:         READY — {cfg['workbench']['workbench_url']}")
     elif dry_run:
         print(f"  Workbench:         (dry-run) would register at {workbench_api} (source: {api_source})")
     else:
         print(f"  Workbench:         {wb_status} ({wb_msg.splitlines()[0]})")
-        print(f"                     Local setup is unaffected. Re-run the installer to retry;")
+        print(f"                     Local setup is unaffected. Re-run with --register-workbench to retry;")
         print(f"                     your stable project id is reused, so no duplicate project is created.")
     print("\n  Start a governed project: open your tool's interactive AI-DLC agent and run /aidlc.")
     print("  This toolkit requires NO access to the private AICC_Unified repository.")
@@ -933,9 +944,13 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--non-interactive", action="store_true", help="never prompt; fail closed on decisions")
     ap.add_argument("--allow-runtime-install", action="store_true",
                     help="permit running the official AWS Labs runtime installer if missing")
+    ap.add_argument("--register-workbench", action="store_true",
+                    help="OPTIONAL: register this project with the AICC Workbench. Off by default — "
+                         "local AI-DLC setup needs no AWS connectivity. Implied by --workbench-api / "
+                         f"${WORKBENCH_API_ENV}.")
     ap.add_argument("--workbench-api", default=None,
-                    help=f"override the Workbench API base URL for project registration "
-                         f"(else ${WORKBENCH_API_ENV}, else the maintained default endpoint).")
+                    help="OPTIONAL: Workbench API base URL for registration (implies --register-workbench; "
+                         f"else ${WORKBENCH_API_ENV}, else the maintained default endpoint).")
     ap.add_argument("--no-browser", action="store_true",
                     help="do not open the Workbench URL in a browser (headless / automation)")
     ap.add_argument("--allow-legacy-tls-keyusage", action="store_true", default=None,
@@ -965,7 +980,13 @@ def main(argv: list[str]) -> int:
     if target == TOOLKIT_ROOT:
         print("Refusing to target the Toolkit repo itself; pass --target <your-project-dir>.", file=sys.stderr)
         return 2
-    # Resolve the Workbench endpoint: flag > env > maintained default.
+    # Workbench is OPT-IN. It is enabled only when the engineer explicitly asks:
+    # --register-workbench, or by providing --workbench-api, or by setting
+    # $AICC_WORKBENCH_API. Otherwise local AI-DLC setup runs with no AWS.
+    register_workbench = bool(args.register_workbench or args.workbench_api
+                              or os.environ.get(WORKBENCH_API_ENV))
+    # Resolve the Workbench endpoint: flag > env > maintained default (only used
+    # when registration is opted in).
     workbench_api, api_source = resolve_api(args.workbench_api)
     # Browser opening is suppressed for headless/automation modes.
     open_browser = not (args.no_browser or args.non_interactive or args.dry_run)
@@ -973,7 +994,7 @@ def main(argv: list[str]) -> int:
     relax_tls = tls.relax_requested(args.allow_legacy_tls_keyusage)
     return install(tool, target, args.yes, args.non_interactive, args.allow_runtime_install,
                    args.force, args.dry_run, workbench_api, api_source, open_browser,
-                   relax_tls_keyusage=relax_tls)
+                   relax_tls_keyusage=relax_tls, register_workbench=register_workbench)
 
 
 if __name__ == "__main__":
