@@ -53,6 +53,7 @@ import pathlib
 import workbench_register as wr
 import tls
 import aidlc_activation
+import harness_registry as hreg
 from workbench_endpoint import WORKBENCH_API_ENV, resolve_api
 
 TOOLKIT_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -187,20 +188,34 @@ def confirm(prompt: str, assume_yes: bool, non_interactive: bool) -> bool:
         return False
 
 
+def _detected_harnesses() -> list[str]:
+    """Harness ids whose CLI is on PATH (editors can't be PATH-detected)."""
+    found = []
+    for hid in hreg.all_ids():
+        h = hreg.HARNESSES[hid]
+        if any(which(c) for c in h.detect_cli):
+            found.append(hid)
+    return found
+
+
 def ask_tool(reg: dict, non_interactive: bool) -> str | None:
-    cert = certified(reg)
-    detected = [t for t in TOOL_CLI if which(TOOL_CLI[t])]
-    approved = [t for t in detected if t in cert]
-    if len(approved) == 1:
-        print(f"Detected certified tool: {approved[0]}")
-        return approved[0]
+    """Select a harness. Reuses an already-installed tool when exactly one is
+    detected; otherwise offers all seven supported harnesses."""
+    detected = _detected_harnesses()
+    if len(detected) == 1:
+        print(f"Detected installed tool: {detected[0]} ({hreg.HARNESSES[detected[0]].display_name}) — reusing it.")
+        return detected[0]
     if non_interactive:
         return None
-    opts = [t for t in TOOL_HARNESS if t in cert]
-    print("Which AI coding tool do you use?")
-    for i, t in enumerate(opts, 1):
-        seen = " (detected)" if t in detected else ""
-        print(f"  {i}. {t}{seen}")
+    cert = certified(reg)
+    opts = hreg.all_ids()
+    print("Which AI coding tool do you use? (all are official AWS Labs AI-DLC harnesses)")
+    for i, hid in enumerate(opts, 1):
+        h = hreg.HARNESSES[hid]
+        legacy = {"claude": "claude-code", "kiro": "kiro-cli"}.get(hid, hid)
+        tag = " [AICC-certified]" if legacy in cert else ""
+        seen = " (detected)" if hid in detected else ""
+        print(f"  {i}. {hid:<10} {h.display_name}{tag}{seen}")
     try:
         sel = input("Enter number: ").strip()
         idx = int(sel) - 1
@@ -224,6 +239,50 @@ def cmd_list() -> int:
         approved = "APPROVED" if t["certification_state"] == "CERTIFIED" and t["id"] in TOOL_HARNESS else "not an install option"
         print(f"  {t['id']:<12} {t['certification_state']}{q:<24} [{approved}]")
     print("\nFactory AI / Cursor: placeholders only.")
+    return 0
+
+
+# Toolkit-integration status per harness — HONEST, and deliberately conservative.
+# This is NOT the AICC certification state (that lives in the public registry);
+# it is "how far the Toolkit's own integration for this harness is proven":
+#   VERIFIED  — exercised end-to-end against the real tool on a real machine.
+#   PARTIAL   — logic + automated/mocked tests here, plus prior real runs on the
+#               tool, but current Windows end-to-end acceptance still pending.
+#   UNTESTED  — registry + config/verify logic in place; NO real-machine run yet.
+# Nothing here is marked VERIFIED until a real-machine acceptance is recorded.
+HARNESS_INTEGRATION_STATUS = {
+    "claude": "PARTIAL",
+    "kiro": "PARTIAL",
+    "kiro-ide": "UNTESTED",
+    "codex": "UNTESTED",
+    "cursor": "UNTESTED",
+    "opencode": "UNTESTED",
+    "copilot": "UNTESTED",
+}
+
+
+def cmd_list_harnesses() -> int:
+    """Show ALL seven official AI-DLC harnesses the Toolkit can configure, with
+    honest Toolkit-integration status and invocation. Separate from `--list`,
+    which reports AICC CERTIFICATION (certified install options only)."""
+    reg = load_registry()
+    cert = certified(reg)
+    print("AICC Engineering Toolkit — official AWS Labs AI-DLC harnesses (configurable)")
+    print("Runtime prerequisite (one-time, per machine): AWS Labs aidlc; `aidlc config --harness <id>` selects a project surface.\n")
+    print(f"  {'harness':<10} {'tool':<16} {'invoke':<7} {'AICC cert':<11} {'toolkit':<9} onboarding surface")
+    print(f"  {'-'*10} {'-'*16} {'-'*7} {'-'*11} {'-'*9} {'-'*34}")
+    for hid in hreg.all_ids():
+        h = hreg.HARNESSES[hid]
+        legacy = {"claude": "claude-code", "kiro": "kiro-cli"}.get(hid, hid)
+        cstate = next((t["certification_state"] for t in reg["tools"] if t["id"] == legacy), "UNCERTIFIED")
+        status = HARNESS_INTEGRATION_STATUS.get(hid, "UNTESTED")
+        print(f"  {hid:<10} {h.display_name:<16} {h.invoke:<7} {cstate:<11} {status:<9} {h.onboarding_file}")
+    print("\nAICC cert = AICC certification (from the public registry projection).")
+    print("toolkit   = how far the Toolkit's own integration is PROVEN (VERIFIED/PARTIAL/UNTESTED).")
+    print("Only claude & kiro are AICC-CERTIFIED; the others are upstream-supported and")
+    print("require real-machine acceptance before any VERIFIED/certified claim.")
+    print("Coexistence: kiro, kiro-ide, codex, cursor, opencode share the root AGENTS.md block;")
+    print("GitHub Copilot's root block is exclusive (configure it alone).")
     return 0
 
 
@@ -334,10 +393,14 @@ def ensure_runtime(plat: dict, assume_yes: bool, non_interactive: bool, allow_in
 
 
 def preserve_check(target: pathlib.Path, harness: str) -> list[str]:
-    """Report existing tool configs that must be preserved (never silently overwritten)."""
+    """Report existing tool configs that must be preserved (never silently
+    overwritten) — across ALL supported harnesses, so switching tools never
+    clobbers another harness's configuration."""
     present = []
-    for rel in ("CLAUDE.md", ".claude", ".claude/agents", ".claude/skills", ".claude/hooks",
-                ".kiro", "AGENTS.md", "aidlc"):
+    rels = ["CLAUDE.md", ".claude", ".claude/agents", ".claude/skills", ".claude/hooks",
+            ".kiro", ".kiro/hooks", ".kiro/steering", ".codex", ".cursor", ".opencode",
+            ".github", "AGENTS.md", "aidlc", ".aidlc"]
+    for rel in rels:
         if (target / rel).exists():
             present.append(rel)
     return present
@@ -578,17 +641,48 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
     if not plat["supported"]:
         print(f"BLOCKED: platform {plat['os']}/{plat['arch']} is not in the official runtime asset matrix.", file=sys.stderr)
         return 2
-    if tool not in TOOL_HARNESS:
-        print(f"BLOCKED: '{tool}' is not supported. Supported: {', '.join(TOOL_HARNESS)}.", file=sys.stderr)
-        return 2
-    if tool not in cert:
-        st = next((t["certification_state"] for t in reg["tools"] if t["id"] == tool), "UNKNOWN")
-        print(f"BLOCKED: '{tool}' is {st}, not CERTIFIED; not an approved install option.", file=sys.stderr)
-        return 2
 
-    # Tool CLI presence
-    tool_present = which(TOOL_CLI[tool]) is not None
-    print(f"Tool `{TOOL_CLI[tool]}`: {'found' if tool_present else 'NOT found (install it from its vendor to run the lifecycle)'}")
+    # Resolve to an official harness via the central registry (accepts a harness
+    # id OR a legacy tool id like 'claude-code'/'kiro-cli').
+    hinfo = hreg.resolve(tool)
+    if not hinfo:
+        print(f"BLOCKED: '{tool}' is not an official AI-DLC harness. Supported: "
+              f"{', '.join(hreg.all_ids())}.", file=sys.stderr)
+        return 2
+    harness = hinfo.id
+
+    # Honest certification labeling. kiro/claude are AICC-CERTIFIED; the other
+    # five are officially UPSTREAM-supported but NOT AICC-certified — the Toolkit
+    # can configure them, but we never claim certification. Legacy tool ids map
+    # back to the public-registry rows.
+    legacy_tool = {"claude": "claude-code", "kiro": "kiro-cli"}.get(harness, harness)
+    cert_state = next((t["certification_state"] for t in reg["tools"] if t["id"] == legacy_tool), "UNCERTIFIED")
+    is_certified = legacy_tool in cert
+    if not is_certified:
+        print(f"NOTE: '{harness}' ({hinfo.display_name}) is an official AWS Labs AI-DLC harness "
+              f"SUPPORTED by this Toolkit, but it is {cert_state} for AICC certification — "
+              f"its Toolkit integration still requires real-machine acceptance. Configuring anyway "
+              f"(honestly, with verification); this is NOT an AICC certification.")
+        if not confirm(f"Proceed configuring the uncertified '{harness}' harness?", assume_yes, non_interactive):
+            print(f"BLOCKED: declined configuring uncertified harness '{harness}'.", file=sys.stderr)
+            return 2
+
+    # Codex requires the target to be a git repository (upstream prerequisite).
+    if hinfo.requires_git_repo and not dry_run:
+        if not (target / ".git").exists():
+            print(f"NOTE: {hinfo.display_name} requires the project to be a git repository "
+                  f"(for project hook discovery). Run `git init` in {target} before using AI-DLC.")
+
+    # Tool CLI presence (editors like Kiro IDE / Cursor can't be PATH-detected).
+    if hinfo.is_editor and not hinfo.detect_cli:
+        tool_present = False
+        print(f"Tool `{hinfo.display_name}`: editor (cannot auto-detect from PATH; "
+              f"ensure it is installed to run the lifecycle)")
+    else:
+        found_exe = next((c for c in hinfo.detect_cli if which(c)), None)
+        tool_present = found_exe is not None
+        print(f"Tool `{hinfo.display_name}` ({'/'.join(hinfo.detect_cli) or 'editor'}): "
+              f"{'found: ' + found_exe if tool_present else 'NOT found (install it from its vendor to run the lifecycle)'}")
 
     # Runtime
     rt_ready, rt_msg, rt_exe = ensure_runtime(plat, assume_yes, non_interactive,
@@ -597,7 +691,7 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
 
     # Preservation (never silently overwrite)
     target.mkdir(parents=True, exist_ok=True)
-    existing = preserve_check(target, TOOL_HARNESS[tool])
+    existing = preserve_check(target, harness)
     if existing:
         print(f"Existing configs detected (will be PRESERVED, not overwritten): {existing}")
 
@@ -606,7 +700,7 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
     for line in apply_aicc_standard(target, tool, force, dry_run):
         print(f"   {line}")
 
-    harness = TOOL_HARNESS[tool]
+    # `harness` was resolved from the registry above.
 
     # AI-DLC activation instructions: tool-neutral AGENTS.md + a thin CLAUDE.md
     # pointer + a Kiro steering pointer, so BOTH tools auto-discover that a build
@@ -694,7 +788,9 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
         result_label = "READY" if ready else "BLOCKED (see above)"
     print("\n== Setup report ==")
     print(f"  Result:            {result_label}")
-    print(f"  Tool:              {tool} (CERTIFIED{' — ' + cert[tool]['qualification'] if cert[tool].get('qualification') else ''})")
+    print(f"  Tool:              {hinfo.display_name} ({harness}) — AICC {cert_state}"
+          f"{' (' + cert[legacy_tool]['qualification'] + ')' if is_certified and cert.get(legacy_tool, {}).get('qualification') else ''}")
+    print(f"  Invoke in-tool:    {hinfo.invoke}  (not all harnesses use /aidlc; Codex uses $aidlc)")
     print(f"  Platform:          {plat['os']}/{plat['arch']}")
     print(f"  Runtime:           {'ready' if rt_ready else 'NOT ready — ' + rt_msg.splitlines()[0]}")
     print(f"  AI-DLC harness:    {harness} — {'CONFIGURED (engine surface verified)' if harness_wired else 'NOT confirmed'}")
@@ -724,8 +820,11 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="AICC Engineering Toolkit one-command setup.")
-    ap.add_argument("--list", action="store_true")
-    ap.add_argument("--tool", help="claude-code | kiro-cli (prompted if omitted)")
+    ap.add_argument("--list", action="store_true", help="list AICC-certified install options")
+    ap.add_argument("--list-harnesses", action="store_true",
+                    help="list ALL seven official AI-DLC harnesses the Toolkit can configure, with honest status")
+    ap.add_argument("--tool", help="legacy alias for --harness (claude-code | kiro-cli)")
+    ap.add_argument("--harness", help="official harness id: " + " | ".join(hreg.all_ids()) + " (prompted if omitted)")
     ap.add_argument("--target", default=".", help="your project directory (default: current dir)")
     ap.add_argument("--yes", action="store_true", help="assume yes to confirmations")
     ap.add_argument("--non-interactive", action="store_true", help="never prompt; fail closed on decisions")
@@ -747,13 +846,16 @@ def main(argv: list[str]) -> int:
 
     if args.list:
         return cmd_list()
+    if args.list_harnesses:
+        return cmd_list_harnesses()
 
     reg = load_registry()
-    tool = args.tool
+    tool = args.harness or args.tool
     if not tool:
         tool = ask_tool(reg, args.non_interactive)
         if not tool:
-            print("No tool selected. Use --tool claude-code|kiro-cli or run interactively.", file=sys.stderr)
+            print("No harness selected. Use --harness <id> (see --list-harnesses) or run interactively.",
+                  file=sys.stderr)
             return 2
 
     target = pathlib.Path(args.target).resolve()
