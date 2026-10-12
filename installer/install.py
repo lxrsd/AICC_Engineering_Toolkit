@@ -47,6 +47,7 @@ import webbrowser
 import pathlib
 
 import workbench_register as wr
+from workbench_endpoint import WORKBENCH_API_ENV, resolve_api
 
 TOOLKIT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 AI_DLC = TOOLKIT_ROOT / "capabilities" / "ai-dlc"
@@ -54,10 +55,9 @@ PUBLIC_REGISTRY = AI_DLC / "validators" / "public-registry.json"
 
 # Project-local AICC config file (per the engineer's own project; portable).
 AICC_CONFIG_REL = pathlib.Path(".aicc") / "config.json"
-# Workbench API base: NOT hardcoded here (independence). Read from the
-# environment or the --workbench-api flag; the public live host is named only in
-# README.md. Empty default => registration honestly reports NOT_CONNECTED.
-WORKBENCH_API_ENV = "AICC_WORKBENCH_API"
+# Workbench API base resolution lives in workbench_endpoint.resolve_api():
+# precedence is --workbench-api flag > $AICC_WORKBENCH_API > maintained default.
+# The default host is named only in that one designated file (and README.md).
 
 TOOL_HARNESS = {"kiro-cli": "kiro", "claude-code": "claude"}
 TOOL_CLI = {"kiro-cli": "kiro-cli", "claude-code": "claude"}
@@ -98,8 +98,44 @@ def which(cmd: str) -> str | None:
     return shutil.which(cmd)
 
 
-def runtime_version() -> tuple[int, int, int] | None:
-    exe = which("aidlc")
+def _candidate_runtime_dirs() -> list[pathlib.Path]:
+    """Default install locations the official AWS Labs installer uses, so we can
+    rediscover `aidlc` right after a fresh install even when the PATH update is
+    not yet visible to this already-running Python process (a common Windows
+    gotcha: PATH changes land in the registry/new shells, not the live env)."""
+    dirs: list[pathlib.Path] = []
+    home = pathlib.Path.home()
+    # POSIX-style default (also used under WSL).
+    dirs += [home / ".aidlc" / "bin", home / ".local" / "bin"]
+    # Windows default user-scope locations (non-admin installs land here).
+    localappdata = os.environ.get("LOCALAPPDATA")
+    if localappdata:
+        dirs += [pathlib.Path(localappdata) / "aidlc" / "bin",
+                 pathlib.Path(localappdata) / "Programs" / "aidlc"]
+    userprofile = os.environ.get("USERPROFILE")
+    if userprofile:
+        dirs += [pathlib.Path(userprofile) / ".aidlc" / "bin"]
+    return dirs
+
+
+def find_runtime_exe() -> str | None:
+    """Locate the `aidlc` executable: PATH first, then the installer's known
+    default directories (handles the post-install 'PATH not refreshed yet' case
+    on Windows). Returns an absolute path string, or None."""
+    exe = shutil.which("aidlc")
+    if exe:
+        return exe
+    names = ["aidlc.exe", "aidlc.cmd", "aidlc.bat", "aidlc"] if os.name == "nt" else ["aidlc"]
+    for d in _candidate_runtime_dirs():
+        for name in names:
+            cand = d / name
+            if cand.exists() and cand.is_file():
+                return str(cand)
+    return None
+
+
+def runtime_version(exe: str | None = None) -> tuple[int, int, int] | None:
+    exe = exe or find_runtime_exe()
     if not exe:
         return None
     try:
@@ -109,6 +145,21 @@ def runtime_version() -> tuple[int, int, int] | None:
         return tuple(int(x) for x in m.groups()) if m else None  # type: ignore
     except Exception:
         return None
+
+
+def runtime_doctor_ok(exe: str | None = None) -> tuple[bool, str]:
+    """Run `aidlc doctor` to validate runtime readiness. Returns (ok, summary).
+    Treats a zero exit as healthy; otherwise surfaces a short diagnostic."""
+    exe = exe or find_runtime_exe()
+    if not exe:
+        return False, "aidlc not found"
+    try:
+        r = subprocess.run([exe, "doctor"], capture_output=True, text=True, timeout=120)
+        out = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+        summary = out[-1] if out else ""
+        return r.returncode == 0, (summary or f"exit {r.returncode}")
+    except Exception as exc:
+        return False, f"could not run `aidlc doctor`: {exc}"
 
 
 def load_registry() -> dict:
@@ -170,49 +221,110 @@ def cmd_list() -> int:
     return 0
 
 
-def ensure_runtime(plat: dict, assume_yes: bool, non_interactive: bool, allow_install: bool, dry_run: bool) -> tuple[bool, str]:
-    """Returns (runtime_ready, message). Installs the OFFICIAL runtime only with
-    confirmation; never bundles it."""
-    ver = runtime_version()
+def _runtime_guidance(plat: dict) -> str:
+    if plat["is_windows"]:
+        return (f"On Windows PowerShell, install the runtime with:\n"
+                f"    irm {INSTALL_PS1} | iex\n"
+                f"(POSIX install.sh does NOT run in PowerShell. WSL2 users use the macOS/Linux command.)")
+    return f"Install the official runtime with:\n    curl -fsSL {INSTALL_SH} | sh"
+
+
+def _run_official_installer(plat: dict) -> tuple[int, str]:
+    """Invoke the OFFICIAL AWS Labs installer for this OS. Never reimplements it;
+    integrity (checksums + SLSA provenance) is enforced by that installer. On
+    Windows uses PowerShell (`irm … install.ps1 | iex`) in user scope so a
+    standard non-admin install works where permitted. Returns (returncode, how)."""
+    if plat["is_windows"]:
+        ps = shutil.which("powershell") or shutil.which("pwsh")
+        if not ps:
+            return 127, "PowerShell not found on PATH"
+        # -NoProfile for a clean env; the official one-liner fetches + runs the
+        # signed installer. Passed as an argument list (no shell string), so a
+        # project path with spaces elsewhere is irrelevant here.
+        cmd = [ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+               f"irm {INSTALL_PS1} | iex"]
+        r = subprocess.run(cmd, timeout=900)
+        return r.returncode, "powershell"
+    # POSIX: the official shell installer. shell=True is required for the pipe;
+    # the command is a fixed, trusted literal (no user input interpolated).
+    r = subprocess.run(f"curl -fsSL {INSTALL_SH} | sh", shell=True, timeout=900)
+    return r.returncode, "sh"
+
+
+def ensure_runtime(plat: dict, assume_yes: bool, non_interactive: bool, allow_install: bool,
+                   dry_run: bool) -> tuple[bool, str, str | None]:
+    """Ensure the OFFICIAL aidlc runtime is present and compatible.
+
+    Returns (runtime_ready, message, exe_path). Installs the OFFICIAL runtime
+    only with explicit consent; never bundles or rewrites it. After an install
+    it rediscovers the executable even if the PATH update is not yet visible to
+    this process, then validates readiness with `aidlc doctor`.
+    """
+    exe = find_runtime_exe()
+    ver = runtime_version(exe)
     if ver and ver >= MIN_RUNTIME:
-        return True, f"existing compatible runtime {'.'.join(map(str, ver))} preserved"
+        return True, f"existing compatible runtime {'.'.join(map(str, ver))} preserved", exe
     if ver and ver < MIN_RUNTIME:
-        return False, (f"runtime {'.'.join(map(str, ver))} is below the required {'.'.join(map(str, MIN_RUNTIME))}; "
-                       f"update it: `aidlc update` (from {RUNTIME_REPO})")
+        return (False,
+                f"runtime {'.'.join(map(str, ver))} is below the required {'.'.join(map(str, MIN_RUNTIME))}; "
+                f"update it: `aidlc update` (from {RUNTIME_REPO})",
+                exe)
+
     # No runtime present.
     if not plat["supported"]:
-        return False, (f"the official AI-DLC runtime has no asset for {plat['os']}/{plat['arch']}; "
-                       f"see {RUNTIME_REPO} releases for supported platforms")
-    if plat["is_windows"]:
-        guidance = (f"On Windows PowerShell, install the runtime with:\n"
-                    f"    irm {INSTALL_PS1} | iex\n"
-                    f"(POSIX install.sh does NOT run in PowerShell. WSL2 users use the macOS/Linux command.)")
-    else:
-        guidance = (f"Install the official runtime with:\n"
-                    f"    curl -fsSL {INSTALL_SH} | sh")
-    if not allow_install:
-        return False, ("AI-DLC runtime not found. This toolkit does not bundle it (third-party, MIT-0).\n"
-                       + guidance + "\nThen re-run this installer. Or pass --allow-runtime-install to run the "
-                       "official installer now (requires confirmation).")
+        return (False,
+                f"the official AI-DLC runtime has no asset for {plat['os']}/{plat['arch']}; "
+                f"see {RUNTIME_REPO} releases for supported platforms",
+                None)
+
+    guidance = _runtime_guidance(plat)
+
     if dry_run:
-        return False, f"DRY-RUN: would run the official {RUNTIME_REPO} installer:\n    {guidance}"
-    if plat["is_windows"]:
-        return False, ("Automated runtime install on Windows must be run in PowerShell by the engineer:\n"
-                       + guidance + "\n(The toolkit will not spawn PowerShell from here.)")
-    if not confirm(f"Install the official AWS Labs AI-DLC runtime (MIT-0) from {INSTALL_SH}?", assume_yes, non_interactive):
-        return False, "runtime install declined by engineer; " + guidance
+        return (False,
+                f"DRY-RUN: runtime not found; would (with your consent) run the official "
+                f"{RUNTIME_REPO} installer. Nothing downloaded or installed.\n    {guidance}",
+                None)
+
+    if not allow_install:
+        return (False,
+                "AI-DLC runtime not found. This toolkit does not bundle it (third-party, MIT-0).\n"
+                + guidance + "\nThen re-run this installer. Or pass --allow-runtime-install to run the "
+                "official installer now (requires explicit confirmation).",
+                None)
+
+    # Explicit consent before executing ANY remote install script.
+    src = INSTALL_PS1 if plat["is_windows"] else INSTALL_SH
+    if not confirm(f"Install the official AWS Labs AI-DLC runtime (MIT-0) from {src}?",
+                   assume_yes, non_interactive):
+        return (False, "runtime install declined; " + guidance, None)
+
     try:
-        # Official installer; integrity (checksums + SLSA provenance) is enforced by
-        # the AWS Labs installer itself. We invoke it, never reimplement it.
-        r = subprocess.run(f"curl -fsSL {INSTALL_SH} | sh", shell=True, timeout=600)
-        if r.returncode != 0:
-            return False, f"official installer exited {r.returncode}; see output above"
-        v2 = runtime_version()
-        if v2 and v2 >= MIN_RUNTIME:
-            return True, f"installed official runtime {'.'.join(map(str, v2))}"
-        return False, "installer ran but `aidlc` not detected on PATH; open a new shell (PATH) and re-run"
+        rc, how = _run_official_installer(plat)
     except Exception as exc:
-        return False, f"runtime install failed: {exc}; " + guidance
+        return (False, f"runtime install failed: {exc}; " + guidance, None)
+    if rc != 0:
+        return (False,
+                f"official installer ({how}) exited {rc}; see output above. " + guidance,
+                None)
+
+    # Rediscover the freshly installed exe (PATH may not be refreshed in THIS
+    # process yet — especially on Windows). Look in the known install dirs.
+    exe2 = find_runtime_exe()
+    v2 = runtime_version(exe2)
+    if not (v2 and v2 >= MIN_RUNTIME):
+        return (False,
+                "installer ran but a compatible `aidlc` was not detected yet. Open a NEW terminal "
+                "(so PATH refreshes) and re-run this installer — your project identity is reused.",
+                exe2)
+
+    # Validate readiness with the runtime's own doctor.
+    ok, summary = runtime_doctor_ok(exe2)
+    msg = f"installed official runtime {'.'.join(map(str, v2))}"
+    if ok:
+        msg += "; `aidlc doctor` OK"
+    else:
+        msg += f"; `aidlc doctor` reported: {summary}"
+    return (ok, msg, exe2)
 
 
 def preserve_check(target: pathlib.Path, harness: str) -> list[str]:
@@ -374,24 +486,28 @@ def save_project_config(target: pathlib.Path, cfg: dict) -> None:
 
 
 def register_with_workbench(target: pathlib.Path, cfg: dict, tool: str, harness: str,
-                            api: str, dry_run: bool) -> tuple[str, str]:
+                            api: str, api_source: str, dry_run: bool) -> tuple[str, str]:
     """Attempt project registration against the Workbench contract.
 
-    Returns (status, message). NEVER fabricates success: a missing/undeployed
-    backend yields NOT_CONNECTED; a reachable-but-bad server yields FAILED. On
-    genuine success the server-issued project_id / workbench_url / pending
-    stages are persisted into cfg['workbench'].
+    Returns (status, message). NEVER fabricates success: an unreachable backend
+    yields NOT_CONNECTED; a reachable-but-bad server yields FAILED. On genuine
+    success the server-issued project_id / workbench_url / pending stages are
+    persisted into cfg['workbench']. Registration is idempotent, so a retry
+    after a network failure reuses the same local_project_id and never creates a
+    duplicate project.
     """
     if not api:
+        # Only reachable if the maintained default is empty AND no override is
+        # set — honest, no fabrication.
         cfg["workbench"]["status"] = wr.STATUS_NOT_CONNECTED
         if not dry_run:
             save_project_config(target, cfg)
         return (wr.STATUS_NOT_CONNECTED,
-                "no Workbench API configured (set --workbench-api or $%s). "
-                "The registration backend ships in a separate phase (private AICC_Unified)."
-                % WORKBENCH_API_ENV)
+                "no Workbench API resolved (pass --workbench-api or set $%s)." % WORKBENCH_API_ENV)
     if dry_run:
-        return (wr.STATUS_NOT_CONNECTED, f"DRY-RUN: would POST registration to {api}{wr.REGISTER_PATH}")
+        return (wr.STATUS_NOT_CONNECTED,
+                f"DRY-RUN: would POST registration to {api}{wr.REGISTER_PATH} "
+                f"(endpoint source: {api_source}); no project created, nothing written.")
 
     try:
         result = wr.register_project(api, cfg["local_project_id"], tool, harness)
@@ -402,6 +518,8 @@ def register_with_workbench(target: pathlib.Path, cfg: dict, tool: str, harness:
             "last_error": str(exc),
             "checked_at": _now_iso(),
         }
+        # Keep the stable local_project_id so a retry re-registers the SAME
+        # project (idempotent) rather than creating a duplicate.
         save_project_config(target, cfg)
         return (exc.status, str(exc))
 
@@ -443,7 +561,7 @@ def maybe_open_browser(url: str, open_browser: bool) -> str:
 
 def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: bool,
             allow_runtime_install: bool, force: bool, dry_run: bool,
-            workbench_api: str, open_browser: bool) -> int:
+            workbench_api: str, api_source: str, open_browser: bool) -> int:
     reg = load_registry()
     cert = certified(reg)
     plat = detect_platform()
@@ -466,7 +584,8 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
     print(f"Tool `{TOOL_CLI[tool]}`: {'found' if tool_present else 'NOT found (install it from its vendor to run the lifecycle)'}")
 
     # Runtime
-    rt_ready, rt_msg = ensure_runtime(plat, assume_yes, non_interactive, allow_runtime_install, dry_run)
+    rt_ready, rt_msg, rt_exe = ensure_runtime(plat, assume_yes, non_interactive,
+                                              allow_runtime_install, dry_run)
     print(f"Runtime: {rt_msg}")
 
     # Preservation (never silently overwrite)
@@ -483,11 +602,14 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
     # Harness config via the runtime (only if runtime ready and not dry-run)
     harness = TOOL_HARNESS[tool]
     harness_wired = False
+    # Use the resolved runtime exe (handles the case where PATH is not refreshed
+    # in this process yet), falling back to a bare "aidlc" on PATH.
+    aidlc_exe = rt_exe or find_runtime_exe() or "aidlc"
     if rt_ready and not dry_run:
         if confirm(f"Run `aidlc config --harness {harness}` in {target}? (preserves existing files; shows a plan)",
                    assume_yes, non_interactive):
             try:
-                r = subprocess.run(["aidlc", "config", "--harness", harness, "--yes"],
+                r = subprocess.run([aidlc_exe, "config", "--harness", harness, "--yes"],
                                    cwd=str(target), capture_output=True, text=True, timeout=180)
                 print((r.stdout or "")[:1000])
                 harness_wired = r.returncode == 0
@@ -516,8 +638,11 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
           f"({'reused from existing config' if reused else 'newly generated'})"
           f"{' (dry-run: not written)' if dry_run else ''}")
 
-    # Workbench registration (honest; never fabricated)
-    wb_status, wb_msg = register_with_workbench(target, cfg, tool, harness, workbench_api, dry_run)
+    # Workbench registration (honest; never fabricated). The endpoint is the
+    # maintained default unless overridden by --workbench-api / env.
+    print(f"Workbench endpoint: {workbench_api or '(none)'} (source: {api_source})")
+    wb_status, wb_msg = register_with_workbench(target, cfg, tool, harness,
+                                                workbench_api, api_source, dry_run)
     print(f"Workbench registration: {wb_status} — {wb_msg}")
 
     # Automatic Workbench opening — ONLY on a genuine registration success, and
@@ -532,10 +657,15 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
         print(f"Next: open {tool.replace('-', ' ')} ("
               f"{'claude' if harness == 'claude' else 'kiro-cli chat'}) and describe the application you want to build.")
 
-    # Report
+    # Report. In dry-run we NEVER claim a successful install — we only describe
+    # what would happen.
     ready = rt_ready and tool_present
+    if dry_run:
+        result_label = "DRY-RUN (no changes made; nothing installed, written, registered, or opened)"
+    else:
+        result_label = "READY" if ready else "BLOCKED (see above)"
     print("\n== Setup report ==")
-    print(f"  Result:            {'READY' if ready else 'BLOCKED (see above)'}")
+    print(f"  Result:            {result_label}")
     print(f"  Tool:              {tool} (CERTIFIED{' — ' + cert[tool]['qualification'] if cert[tool].get('qualification') else ''})")
     print(f"  Platform:          {plat['os']}/{plat['arch']}")
     print(f"  Runtime:           {'ready' if rt_ready else 'NOT ready — ' + rt_msg.splitlines()[0]}")
@@ -549,10 +679,12 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
     print(f"  Project config:    {target / AICC_CONFIG_REL}")
     if wb_status == wr.STATUS_REGISTERED:
         print(f"  Workbench:         READY — {cfg['workbench']['workbench_url']}")
+    elif dry_run:
+        print(f"  Workbench:         (dry-run) would register at {workbench_api} (source: {api_source})")
     else:
         print(f"  Workbench:         {wb_status} ({wb_msg.splitlines()[0]})")
-        print(f"                     Local setup is unaffected; registration will succeed once the")
-        print(f"                     backend endpoint is deployed (separate AICC_Unified phase).")
+        print(f"                     Local setup is unaffected. Re-run the installer to retry;")
+        print(f"                     your stable project id is reused, so no duplicate project is created.")
     print("\n  Start a governed project: open your tool's interactive AI-DLC agent and run /aidlc.")
     print("  This toolkit requires NO access to the private AICC_Unified repository.")
     return 0 if ready else 2
@@ -567,9 +699,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--non-interactive", action="store_true", help="never prompt; fail closed on decisions")
     ap.add_argument("--allow-runtime-install", action="store_true",
                     help="permit running the official AWS Labs runtime installer if missing")
-    ap.add_argument("--workbench-api", default=os.environ.get(WORKBENCH_API_ENV, ""),
-                    help=f"Workbench API base URL for project registration (or set ${WORKBENCH_API_ENV}). "
-                         "If unset, registration reports NOT_CONNECTED (no fabricated URL).")
+    ap.add_argument("--workbench-api", default=None,
+                    help=f"override the Workbench API base URL for project registration "
+                         f"(else ${WORKBENCH_API_ENV}, else the maintained default endpoint).")
     ap.add_argument("--no-browser", action="store_true",
                     help="do not open the Workbench URL in a browser (headless / automation)")
     ap.add_argument("--force", action="store_true")
@@ -591,10 +723,12 @@ def main(argv: list[str]) -> int:
     if target == TOOLKIT_ROOT:
         print("Refusing to target the Toolkit repo itself; pass --target <your-project-dir>.", file=sys.stderr)
         return 2
+    # Resolve the Workbench endpoint: flag > env > maintained default.
+    workbench_api, api_source = resolve_api(args.workbench_api)
     # Browser opening is suppressed for headless/automation modes.
     open_browser = not (args.no_browser or args.non_interactive or args.dry_run)
     return install(tool, target, args.yes, args.non_interactive, args.allow_runtime_install,
-                   args.force, args.dry_run, args.workbench_api, open_browser)
+                   args.force, args.dry_run, workbench_api, api_source, open_browser)
 
 
 if __name__ == "__main__":

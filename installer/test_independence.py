@@ -38,6 +38,15 @@ FORBIDDEN_SUBSTRINGS = [
 # non-doc files below.
 DOC_FILES_SUFFIX = (".md",)
 INFRA_IDS = ["d1p32afqqmff9l", "cloudfront.net"]
+# The approved, maintained default Workbench endpoint has ONE designated home in
+# code: installer/workbench_endpoint.py. So an engineer never has to type an API
+# URL, that single file is permitted to name the PUBLIC Amplify Workbench host
+# (a live public site, not a secret) alongside human-facing Markdown. Every
+# other code/config file remains forbidden from naming the host and must resolve
+# the endpoint through workbench_endpoint.resolve_api(). This file is exempt
+# ONLY from the INFRA_IDS check; it is still scanned for private paths, internal
+# backend tokens, and real secret values.
+ENDPOINT_FILES = {"workbench_endpoint.py"}
 # The public registry's sanitization is verified structurally by
 # test_public_registry_is_sanitized (it must carry no `state_reason` field).
 # A bare `state_reason` field-NAME mention in governance prose or validator
@@ -84,8 +93,9 @@ class ToolkitIndependence(unittest.TestCase):
                 if s in text:
                     offenders.append(f"{p.relative_to(ROOT)}: contains path/internal token '{s}'")
             # Infra IDs are allowed only in human-facing Markdown docs (the
-            # approved public Workbench link); forbidden in code/config.
-            if not p.name.endswith(DOC_FILES_SUFFIX):
+            # approved public Workbench link) and in the single designated
+            # endpoint source file; forbidden in all other code/config.
+            if not p.name.endswith(DOC_FILES_SUFFIX) and p.name not in ENDPOINT_FILES:
                 for s in INFRA_IDS:
                     if s in text:
                         offenders.append(f"{p.relative_to(ROOT)}: infra id '{s}' in a non-doc file")
