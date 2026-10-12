@@ -29,7 +29,8 @@
   install.py's project config). OneDrive-backed paths with spaces are supported.
 
 .PARAMETER Target       Project directory for the AI-DLC build (prompted if omitted).
-.PARAMETER Tool         claude-code | kiro-cli (installer prompts if omitted).
+.PARAMETER Harness      Official AI-DLC harness: claude | kiro | kiro-ide | codex | cursor | opencode | copilot (installer prompts if omitted).
+.PARAMETER Tool         Legacy alias: claude-code | kiro-cli.
 .PARAMETER Yes          Consent to prerequisite installs without prompting.
 .PARAMETER NoBrowser    Do not open the Workbench in a browser.
 .PARAMETER Ref          Pinned release tag to download (default: v0.1.0).
@@ -42,6 +43,8 @@
 [CmdletBinding()]
 param(
   [string]$Target = "",
+  [ValidateSet("claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot", "")]
+  [string]$Harness = "",
   [ValidateSet("claude-code", "kiro-cli", "")]
   [string]$Tool = "",
   [switch]$Yes,
@@ -239,6 +242,7 @@ try {
   # Build the argument list. Quoting is handled by PowerShell's native call
   # operator with an array, so a Target path with spaces (OneDrive) is safe.
   $pyArgs = @($installPy, "--target", $Target, "--allow-runtime-install")
+  if ($Harness -ne "") { $pyArgs += @("--harness", $Harness) }
   if ($Tool -ne "")  { $pyArgs += @("--tool", $Tool) }
   if ($Yes)          { $pyArgs += "--yes" }
   if ($NoBrowser)    { $pyArgs += "--no-browser" }

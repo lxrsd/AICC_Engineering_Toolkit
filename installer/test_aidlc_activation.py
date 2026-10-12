@@ -128,19 +128,38 @@ class HarnessVerification(unittest.TestCase):
 
     def test_claude_surface_detected(self):
         t = _proj()
+        # Accurate upstream surface: the runtime writes .claude/CLAUDE.md.
         (t / ".claude").mkdir()
+        (t / ".claude" / "CLAUDE.md").write_text("onboarding", encoding="utf-8")
         self.assertTrue(act._harness_configured(t, "claude"))
+
+    def test_bare_claude_dir_alone_is_not_proof(self):
+        # An empty .claude dir is not a configured engine.
+        t = _proj()
+        (t / ".claude").mkdir()
+        self.assertFalse(act._harness_configured(t, "claude"))
 
     def test_kiro_engine_surface_detected(self):
         t = _proj()
         (t / ".kiro" / "hooks").mkdir(parents=True)
+        (t / ".kiro" / "hooks" / "aidlc.hook").write_text("x", encoding="utf-8")
         self.assertTrue(act._harness_configured(t, "kiro"))
 
 
 class ConfigureHarness(unittest.TestCase):
+    @staticmethod
+    def _mk_claude(cwd):
+        (cwd / ".claude").mkdir(exist_ok=True)
+        (cwd / ".claude" / "CLAUDE.md").write_text("onboarding", encoding="utf-8")
+
+    @staticmethod
+    def _mk_kiro(cwd):
+        (cwd / ".kiro" / "hooks").mkdir(parents=True, exist_ok=True)
+        (cwd / ".kiro" / "hooks" / "aidlc.hook").write_text("x", encoding="utf-8")
+
     def test_runtime_that_builds_surface_is_configured(self):
         t = _proj()
-        run = _Run(effect=lambda cwd: (cwd / ".claude").mkdir(exist_ok=True))
+        run = _Run(effect=self._mk_claude)
         ok, msg = act.configure_harness("/x/aidlc", t, "claude", dry_run=False, run=run)
         self.assertTrue(ok)
         self.assertIn("verified", msg)
@@ -157,7 +176,7 @@ class ConfigureHarness(unittest.TestCase):
 
     def test_already_configured_is_idempotent_without_running(self):
         t = _proj()
-        (t / ".claude").mkdir()
+        self._mk_claude(t)
         run = _Run()
         ok, msg = act.configure_harness("/x/aidlc", t, "claude", dry_run=False, run=run)
         self.assertTrue(ok)
@@ -166,24 +185,24 @@ class ConfigureHarness(unittest.TestCase):
 
     def test_switch_kiro_to_claude_preserves_kiro(self):
         t = _proj()
-        (t / ".kiro" / "hooks").mkdir(parents=True)
-        run = _Run(effect=lambda cwd: (cwd / ".claude").mkdir(exist_ok=True))
+        self._mk_kiro(t)
+        run = _Run(effect=self._mk_claude)
         ok, _ = act.configure_harness("/x/aidlc", t, "claude", dry_run=False, run=run)
         self.assertTrue(ok)
         self.assertTrue((t / ".kiro" / "hooks").exists(), "existing Kiro engine must be preserved")
-        self.assertTrue((t / ".claude").exists())
+        self.assertTrue((t / ".claude" / "CLAUDE.md").exists())
 
     def test_switch_claude_to_kiro_preserves_claude(self):
         t = _proj()
-        (t / ".claude").mkdir()
-        run = _Run(effect=lambda cwd: (cwd / ".kiro" / "hooks").mkdir(parents=True, exist_ok=True))
+        self._mk_claude(t)
+        run = _Run(effect=self._mk_kiro)
         ok, _ = act.configure_harness("/x/aidlc", t, "kiro", dry_run=False, run=run)
         self.assertTrue(ok)
-        self.assertTrue((t / ".claude").exists(), "existing Claude engine must be preserved")
+        self.assertTrue((t / ".claude" / "CLAUDE.md").exists(), "existing Claude engine must be preserved")
 
     def test_dry_run_does_not_run_or_write(self):
         t = _proj()
-        run = _Run(effect=lambda cwd: (cwd / ".claude").mkdir(exist_ok=True))
+        run = _Run(effect=self._mk_claude)
         ok, msg = act.configure_harness("/x/aidlc", t, "claude", dry_run=True, run=run)
         self.assertFalse(ok)
         self.assertEqual(run.calls, [])

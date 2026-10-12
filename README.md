@@ -95,10 +95,64 @@ with spaces (OneDrive-backed Desktop) are fully supported — keep the quotes.
 
 ### 2. Choose your AI tool — and it gets *configured*, not just installed
 
-The installer detects or asks for **Claude Code** or **Kiro CLI** — the two
-certified tools. Pass `--tool claude-code` or `--tool kiro-cli` to skip the
-prompt. Your existing agents, skills, hooks, and `CLAUDE.md` / `AGENTS.md` are
+The Toolkit supports **all seven official AWS Labs AI-DLC harnesses**. Pass
+`--harness <id>` (or let the installer detect/prompt). Run
+`python3 installer/install.py --list-harnesses` to see the live matrix.
+
+| Harness id | Tool | Invoke in-tool | AICC certification | Toolkit integration |
+|-----------|------|----------------|--------------------|---------------------|
+| `claude` | Claude Code | `/aidlc` | ✅ Certified | PARTIAL¹ |
+| `kiro` | Kiro CLI | `/aidlc` | ✅ Certified | PARTIAL¹ |
+| `kiro-ide` | Kiro IDE | `/aidlc` | ⏳ (see registry) | UNTESTED² |
+| `codex` | Codex CLI | **`$aidlc`** | — | UNTESTED² |
+| `cursor` | Cursor | `/aidlc` | ⏳ Pending | UNTESTED² |
+| `opencode` | opencode | `/aidlc` | — | UNTESTED² |
+| `copilot` | GitHub Copilot | `/aidlc` | — | UNTESTED² |
+
+¹ **PARTIAL** = logic + automated tests here and prior real runs on the tool;
+current end-to-end Windows acceptance still pending.
+² **UNTESTED** = registry + config/verify logic in place, but **no real-machine
+acceptance yet** — the Toolkit configures them honestly and verifies the result,
+but does not claim they work end-to-end until tested on a real machine.
+> **Codex uses `$aidlc`, not `/aidlc`** — the Toolkit does not pretend every
+> harness shares one invocation. Codex also requires the project to be a **git
+> repository**.
+
+**The one-time runtime prerequisite.** The official AWS Labs AI-DLC runtime
+(`aidlc`) is installed **once per machine** (the bootstrapper/installer handles
+this with your consent). Its native installer ships *every* harness runtime;
+`aidlc config --harness <id>` then configures **each project** for the harness
+you chose.
+
+**It *configures* the tool, not just installs it.** For your selected harness the
+Toolkit runs the official runtime to build the harness's engine surface
+(`.claude/`, `.kiro/`, `.codex/`, `.cursor/`, `.opencode/`, or Copilot's
+`.github/`) and **verifies it was actually created** — never claiming success on
+a no-op. It also writes a shared, tool-neutral **`AGENTS.md`** activation rule
+plus a thin **`CLAUDE.md`** pointer and a Kiro steering pointer, so both tools
+auto-discover that a build request must start the governed workflow.
+
+**Switching tools is supported and non-destructive.** Re-run with a different
+`--harness`: the new harness is configured and the previous one's configuration
+is left intact. Per upstream, `kiro`, `kiro-ide`, `codex`, `cursor`, and
+`opencode` can **coexist** in one project (they share the root `AGENTS.md`
+block); **GitHub Copilot's root block is exclusive**, so configure Copilot on
+its own. Your existing agents, skills, hooks, settings, and instructions are
 **preserved**, never overwritten.
+
+#### Simple folder layout
+
+```
+your-project/
+├── AGENTS.md                 # shared AI-DLC activation rule (all tools)
+├── CLAUDE.md                 # thin pointer to AGENTS.md (Claude Code)
+├── .aicc/
+│   ├── config.json           # your stable project id + harness + Workbench status
+│   └── ai-dlc/               # AICC methodology, validators, templates (namespaced)
+├── .claude/ | .kiro/ | .codex/ | .cursor/ | .opencode/ | .github/
+│                             # the official engine surface for your harness(es)
+└── (your application source — untouched)
+```
 
 The Toolkit does **more than install the tool** — it *configures the official
 AWS Labs AI-DLC methodology for the tool you selected* in your project:
