@@ -93,12 +93,34 @@ with spaces (OneDrive-backed Desktop) are fully supported — keep the quotes.
 > `python3 installer/install.py --target /path/to/your/project` (Windows:
 > `py installer\install.py --target C:\path\to\your\project`).
 
-### 2. Choose your AI tool
+### 2. Choose your AI tool — and it gets *configured*, not just installed
 
 The installer detects or asks for **Claude Code** or **Kiro CLI** — the two
 certified tools. Pass `--tool claude-code` or `--tool kiro-cli` to skip the
 prompt. Your existing agents, skills, hooks, and `CLAUDE.md` / `AGENTS.md` are
 **preserved**, never overwritten.
+
+The Toolkit does **more than install the tool** — it *configures the official
+AWS Labs AI-DLC methodology for the tool you selected* in your project:
+
+- Runs the official runtime to build the **AI-DLC engine surface** for your
+  harness (`.kiro/` for Kiro CLI, `.claude/` for Claude Code) and **verifies it
+  was actually created** — it won't claim "configured" on a no-op.
+- Writes a tool-neutral **`AGENTS.md`** (the AI-DLC activation rule) plus a thin
+  **`CLAUDE.md`** that points Claude at `AGENTS.md`, and a Kiro steering pointer.
+  So **both** tools automatically discover that a build request must start the
+  governed workflow — no special prompt needed.
+
+**Switching tools later is supported and non-destructive.** Re-run the installer
+with the other `--tool`: it configures that harness and leaves the first one's
+configuration intact (both can coexist in one project where the runtime supports
+it). Your project identity is reused — no framework files to rebuild by hand.
+
+> **What "configured" means in practice:** open the project in Claude Code or
+> Kiro CLI and type only *"Build me an Expense Tracker web application."* The
+> tool starts the official AI-DLC process — **Requirements → Design → human Plan
+> Approval → Code → Tests → Evidence** — instead of writing application code
+> straight away. The approval checkpoint is a real human gate.
 
 ### 3. Your personal Workbench opens automatically
 
