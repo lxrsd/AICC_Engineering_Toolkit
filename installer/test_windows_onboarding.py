@@ -14,7 +14,10 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import pathlib
+import shutil
+import stat
 import tempfile
 import unittest
 
@@ -366,6 +369,97 @@ class RuntimeRediscovery(unittest.TestCase):
             install.shutil.which = orig_which
             install._candidate_runtime_dirs = orig_cand
         self.assertEqual(found, str(exe))
+
+
+# ----------------------------------------------------------------------------
+# Windows corporate failures: Claude off-PATH detection, OneDrive access-denied
+# (read-only) sync, interrupted/resumable install, existing-hooks preservation.
+# Regression for the Huron laptop crash at apply_aicc_standard()/shutil.rmtree.
+# ----------------------------------------------------------------------------
+class ClaudeDetection(unittest.TestCase):
+    def test_claude_found_in_userprofile_local_bin_off_path(self):
+        # %USERPROFILE%\.local\bin\claude.exe not on PATH must still be detected.
+        home = pathlib.Path(tempfile.mkdtemp())
+        binp = home / ".local" / "bin"
+        binp.mkdir(parents=True)
+        exe = binp / ("claude.exe" if install.os.name == "nt" else "claude")
+        exe.write_text("#!/bin/sh\n", encoding="utf-8")
+        with _patched(shutil=type("S", (), {"which": staticmethod(lambda n: None)}),
+                      _candidate_tool_dirs=lambda: [binp]):
+            found = install.find_tool_exe(("claude",))
+        self.assertEqual(found, str(exe))
+
+    def test_find_tool_exe_prefers_path(self):
+        with _patched(shutil=type("S", (), {"which": staticmethod(lambda n: "/usr/bin/" + n)}),
+                      _candidate_tool_dirs=lambda: []):
+            self.assertEqual(install.find_tool_exe(("claude",)), "/usr/bin/claude")
+
+    def test_missing_tool_returns_none(self):
+        with _patched(shutil=type("S", (), {"which": staticmethod(lambda n: None)}),
+                      _candidate_tool_dirs=lambda: [pathlib.Path(tempfile.mkdtemp())]):
+            self.assertIsNone(install.find_tool_exe(("claude",)))
+
+
+class NonDestructiveApply(unittest.TestCase):
+    def _toolkit_hooks_exist(self):
+        return (install.TOOLKIT_ROOT / "installer" / "hooks").exists()
+
+    def test_safe_sync_overwrites_readonly_destination(self):
+        # OneDrive marks files read-only; the sync must clear it, not crash.
+        src = pathlib.Path(tempfile.mkdtemp())
+        (src / "sub").mkdir()
+        (src / "sub" / "f.json").write_text("NEW", encoding="utf-8")
+        dst = pathlib.Path(tempfile.mkdtemp()) / "hooks"
+        (dst / "sub").mkdir(parents=True)
+        ro = dst / "sub" / "f.json"
+        ro.write_text("OLD", encoding="utf-8")
+        os.chmod(ro, stat.S_IREAD)
+        install._safe_sync_tree(src, dst)   # must not raise PermissionError
+        self.assertEqual(ro.read_text(), "NEW")
+
+    def test_apply_does_not_rmtree_and_preserves_engineer_files(self):
+        # The exact crash scenario: an existing .aicc hooks dir with a read-only
+        # file AND an engineer-owned file. apply must not rmtree it.
+        proj = _spaced_project()
+        hd = proj / ".aicc" / "ai-dlc" / "installer" / "hooks"
+        hd.mkdir(parents=True)
+        eng = hd / "engineer-notes.txt"
+        eng.write_text("MINE", encoding="utf-8")
+        locked = hd / "locked.hook"
+        locked.write_text("x", encoding="utf-8")
+        os.chmod(locked, stat.S_IREAD)
+        out = install.apply_aicc_standard(proj, "claude", force=False, dry_run=False)
+        # No crash; engineer file preserved (no recursive delete).
+        self.assertTrue(eng.exists())
+        self.assertEqual(eng.read_text(), "MINE")
+        self.assertTrue(any("hook" in line for line in out))
+        # cleanup read-only bit so tempdir removal doesn't warn
+        os.chmod(locked, stat.S_IWRITE | stat.S_IREAD)
+        shutil.rmtree(proj.parent, ignore_errors=True)
+
+    def test_apply_is_idempotent_and_resumable(self):
+        # Running twice (as after an interrupted install) must converge, not fail.
+        proj = _spaced_project()
+        out1 = install.apply_aicc_standard(proj, "claude", force=False, dry_run=False)
+        out2 = install.apply_aicc_standard(proj, "claude", force=False, dry_run=False)
+        self.assertTrue(any("methodology" in l for l in out1))
+        # Second pass: methodology already present (idempotent, no crash).
+        self.assertTrue(any("already present" in l for l in out2))
+        shutil.rmtree(proj.parent, ignore_errors=True)
+
+    def test_access_denied_is_reported_not_crash(self):
+        # If a copy genuinely cannot proceed, apply degrades to a SKIPPED note
+        # instead of raising — local setup must not hard-crash.
+        proj = _spaced_project()
+
+        def boom(src, dst):
+            raise PermissionError(13, "Access is denied")
+
+        with _patched(_safe_sync_tree=boom):
+            out = install.apply_aicc_standard(proj, "claude", force=False, dry_run=False)
+        self.assertTrue(any("SKIPPED" in line for line in out),
+                        f"expected a SKIPPED note, got: {out}")
+        shutil.rmtree(proj.parent, ignore_errors=True)
 
 
 if __name__ == "__main__":
