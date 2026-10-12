@@ -60,16 +60,38 @@ is generated. You get speed *and* control.
 - **Evidence for every run** — requirements, design, tests, and artifacts are
   traceable, which is what makes a run *certifiable*.
 
-### 1. Install the Toolkit
+### 1. Install the Toolkit — one command, fresh machine
 
-Clone this repo, then run the one-command setup, pointed at **your own project
-folder**. One command per OS — nothing else to invent:
+You do **not** need Python, Git, your AI tool, or the AI-DLC runtime installed
+first. The native bootstrapper detects what's missing and, with your consent,
+installs each prerequisite from its official source, then runs the full AICC
+setup. One documented entry point per OS:
 
-| Your OS | Command (run from the cloned `AICC_Engineering_Toolkit` folder) |
-|---------|-----------------------------------------------------------------|
-| **Windows** (PowerShell) | `py installer\install.py --target C:\path\to\your\project` |
-| **macOS** | `python3 installer/install.py --target /path/to/your/project` |
-| **Linux** (incl. WSL2) | `python3 installer/install.py --target /path/to/your/project` |
+| Your OS | One command (no prior setup required) |
+|---------|----------------------------------------|
+| **Windows** (PowerShell) | `powershell -ExecutionPolicy Bypass -File bootstrap\bootstrap.ps1 -Target "C:\path\to\your project"` |
+| **macOS** | `bash bootstrap/bootstrap.sh --target "/path/to/your project"` |
+| **Linux** (incl. WSL2) | `bash bootstrap/bootstrap.sh --target "/path/to/your project"` |
+
+The bootstrapper:
+
+1. detects your OS + CPU and refuses unsupported combinations honestly;
+2. detects or (with your explicit **yes**) installs **Python 3**, **Git**, your
+   chosen **AI harness** (Kiro CLI *or* Claude Code), and the official **AWS
+   Labs AI-DLC runtime** — each from its official, publisher-verified source, in
+   **user scope** (no admin, no hidden elevation);
+3. then runs `installer/install.py` to apply the AICC standard, register your
+   project, and open your Workbench.
+
+Already have the tools? It reuses them and never downgrades or overwrites them.
+Add `--dry-run` to preview every step without changing anything, `--yes` for
+unattended automation, and `--no-browser` for headless/CI. On Windows, paths
+with spaces (OneDrive-backed Desktop) are fully supported — keep the quotes.
+
+> **Prefer to drive the Python installer yourself?** If Python is already
+> installed you can skip the bootstrapper and run `install.py` directly:
+> `python3 installer/install.py --target /path/to/your/project` (Windows:
+> `py installer\install.py --target C:\path\to\your\project`).
 
 ### 2. Choose your AI tool
 
