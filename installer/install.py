@@ -44,6 +44,7 @@ import json
 import os
 import platform
 import shutil
+import stat
 import subprocess
 import sys
 import uuid
@@ -141,6 +142,49 @@ def find_runtime_exe() -> str | None:
     return None
 
 
+def _candidate_tool_dirs() -> list[pathlib.Path]:
+    """User-scope locations where AI tool CLIs commonly install, so detection
+    works even when the live process PATH hasn't picked them up (the Windows
+    'PATH not refreshed' gotcha). Claude Code on Windows installs to
+    %USERPROFILE%\\.local\\bin\\claude.exe — exactly this case."""
+    dirs: list[pathlib.Path] = []
+    home = pathlib.Path.home()
+    dirs += [home / ".local" / "bin", home / "bin"]
+    userprofile = os.environ.get("USERPROFILE")
+    if userprofile:
+        up = pathlib.Path(userprofile)
+        dirs += [up / ".local" / "bin", up / "bin"]
+    localappdata = os.environ.get("LOCALAPPDATA")
+    if localappdata:
+        la = pathlib.Path(localappdata)
+        dirs += [la / "Programs", la / "bin"]
+    # De-dup while preserving order.
+    seen, out = set(), []
+    for d in dirs:
+        k = str(d)
+        if k not in seen:
+            seen.add(k); out.append(d)
+    return out
+
+
+def find_tool_exe(names: tuple | list) -> str | None:
+    """Locate an AI tool CLI by candidate command name(s): PATH first, then the
+    known user-scope install dirs (with Windows extensions). Returns an absolute
+    path string, or None. Mirrors find_runtime_exe for the same Windows reason."""
+    for n in names:
+        hit = shutil.which(n)
+        if hit:
+            return hit
+    exts = (".exe", ".cmd", ".bat", "") if os.name == "nt" else ("",)
+    for d in _candidate_tool_dirs():
+        for n in names:
+            for ext in exts:
+                cand = d / f"{n}{ext}"
+                if cand.exists() and cand.is_file():
+                    return str(cand)
+    return None
+
+
 def runtime_version(exe: str | None = None) -> tuple[int, int, int] | None:
     exe = exe or find_runtime_exe()
     if not exe:
@@ -189,11 +233,12 @@ def confirm(prompt: str, assume_yes: bool, non_interactive: bool) -> bool:
 
 
 def _detected_harnesses() -> list[str]:
-    """Harness ids whose CLI is on PATH (editors can't be PATH-detected)."""
+    """Harness ids whose CLI is installed (PATH or known user-scope dirs).
+    Editors without a CLI can't be detected this way."""
     found = []
     for hid in hreg.all_ids():
         h = hreg.HARNESSES[hid]
-        if any(which(c) for c in h.detect_cli):
+        if h.detect_cli and find_tool_exe(h.detect_cli):
             found.append(hid)
     return found
 
@@ -406,6 +451,53 @@ def preserve_check(target: pathlib.Path, harness: str) -> list[str]:
     return present
 
 
+def _safe_copy_file(src: pathlib.Path, dst: pathlib.Path) -> None:
+    """Copy one file, clearing a read-only destination first (Windows/OneDrive)."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        try:
+            dst.chmod(stat.S_IWRITE | stat.S_IREAD)
+        except OSError:
+            pass
+    shutil.copy2(src, dst)
+
+
+def _safe_sync_tree(src: pathlib.Path, dst: pathlib.Path) -> None:
+    """Copy `src` into `dst` file-by-file WITHOUT deleting `dst` first.
+
+    This replaces the old `rmtree(dst); copytree(src, dst)` pattern, which was
+    both unsafe (destroys the destination before the copy succeeds) and fragile
+    on Windows/OneDrive, where an open handle, a lazy-sync placeholder, or a
+    read-only attribute makes a recursive delete fail with WinError 5. Copying
+    in place:
+      - never recursively deletes a directory (so engineer files under the tree
+        are never destroyed),
+      - is idempotent and resumable: a re-run or an interrupted run just
+        re-copies files; partial state is simply overwritten on the next pass,
+      - clears a destination file's read-only bit (common on OneDrive) before
+        overwriting it, instead of failing.
+    Files that exist only in `dst` are left untouched (non-destructive); the
+    AICC-managed trees here are fully specified by `src`, so this converges to
+    the shipped content without removing anything the engineer added alongside.
+    """
+    dst.mkdir(parents=True, exist_ok=True)
+    for root, dirs, files in os.walk(src):
+        rel = pathlib.Path(root).relative_to(src)
+        out_dir = dst / rel
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for f in files:
+            s = pathlib.Path(root) / f
+            d = out_dir / f
+            # On Windows/OneDrive a destination file may be read-only; clear it
+            # so the overwrite succeeds instead of raising PermissionError.
+            if d.exists():
+                try:
+                    d.chmod(stat.S_IWRITE | stat.S_IREAD)
+                except OSError:
+                    pass
+            shutil.copy2(s, d)
+
+
 def apply_aicc_standard(target: pathlib.Path, tool: str, force: bool, dry_run: bool) -> list[str]:
     dest = target / ".aicc" / "ai-dlc"
     done = []
@@ -422,10 +514,13 @@ def apply_aicc_standard(target: pathlib.Path, tool: str, force: bool, dry_run: b
         if dry_run:
             done.append(f"{name}: DRY-RUN would install")
             continue
-        if dst.exists():
-            shutil.rmtree(dst)
-        shutil.copytree(src, dst)
-        done.append(f"{name}: installed")
+        # Non-destructive in-place sync (no rmtree): safe on Windows/OneDrive and
+        # resumable after an interrupted run.
+        try:
+            _safe_sync_tree(src, dst)
+            done.append(f"{name}: installed")
+        except OSError as exc:
+            done.append(f"{name}: SKIPPED ({exc.__class__.__name__}: {exc}); existing files preserved")
 
     # Phase 3: ship the automatic Workbench sync client + hook definitions into
     # the engineer's project so lifecycle progress syncs with no manual step.
@@ -435,14 +530,17 @@ def apply_aicc_standard(target: pathlib.Path, tool: str, force: bool, dry_run: b
         for fname in ("workbench_sync.py", "workbench_register.py"):
             src_f = TOOLKIT_ROOT / "installer" / fname
             if src_f.exists():
-                shutil.copy2(src_f, inst_dst / fname)
+                _safe_copy_file(src_f, inst_dst / fname)
         hooks_src = TOOLKIT_ROOT / "installer" / "hooks"
         if hooks_src.exists():
-            hooks_dst = inst_dst / "hooks"
-            if hooks_dst.exists():
-                shutil.rmtree(hooks_dst)
-            shutil.copytree(hooks_src, hooks_dst)
-        done.append("workbench sync client + hooks: installed under .aicc/ai-dlc/installer/")
+            # Non-destructive: sync hook files in place; NEVER rmtree the dir.
+            # This is the exact operation that crashed on OneDrive (WinError 5).
+            try:
+                _safe_sync_tree(hooks_src, inst_dst / "hooks")
+                done.append("workbench sync client + hooks: installed under .aicc/ai-dlc/installer/")
+            except OSError as exc:
+                done.append(f"workbench sync hooks: SKIPPED ({exc.__class__.__name__}: {exc}); "
+                            "existing hook files preserved")
     else:
         done.append("workbench sync client + hooks: DRY-RUN would install")
     return done
@@ -469,7 +567,10 @@ def wire_sync_hook(target: pathlib.Path, harness: str, dry_run: bool) -> str:
         dst_dir = target / ".kiro" / "hooks"
         dst_dir.mkdir(parents=True, exist_ok=True)
         dst = dst_dir / "aicc-workbench-sync.kiro.hook"
-        shutil.copy2(src, dst)   # adds/refreshes only this one hook file
+        try:
+            _safe_copy_file(src, dst)   # adds/refreshes only this one hook file (read-only safe)
+        except OSError as exc:
+            return f"sync hook: could not write {dst.name} ({exc.__class__.__name__}); other Kiro hooks preserved"
         return f"sync hook: installed {dst.relative_to(target)} (other Kiro hooks preserved)"
 
     if harness == "claude":
@@ -679,7 +780,9 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
         print(f"Tool `{hinfo.display_name}`: editor (cannot auto-detect from PATH; "
               f"ensure it is installed to run the lifecycle)")
     else:
-        found_exe = next((c for c in hinfo.detect_cli if which(c)), None)
+        # PATH-aware + user-scope detection (finds e.g. %USERPROFILE%\.local\bin\claude.exe
+        # even when it is not on the live process PATH).
+        found_exe = find_tool_exe(hinfo.detect_cli)
         tool_present = found_exe is not None
         print(f"Tool `{hinfo.display_name}` ({'/'.join(hinfo.detect_cli) or 'editor'}): "
               f"{'found: ' + found_exe if tool_present else 'NOT found (install it from its vendor to run the lifecycle)'}")
