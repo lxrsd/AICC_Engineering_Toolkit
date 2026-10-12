@@ -245,7 +245,80 @@ def apply_aicc_standard(target: pathlib.Path, tool: str, force: bool, dry_run: b
             shutil.rmtree(dst)
         shutil.copytree(src, dst)
         done.append(f"{name}: installed")
+
+    # Phase 3: ship the automatic Workbench sync client + hook definitions into
+    # the engineer's project so lifecycle progress syncs with no manual step.
+    inst_dst = dest / "installer"
+    if not dry_run:
+        inst_dst.mkdir(parents=True, exist_ok=True)
+        for fname in ("workbench_sync.py", "workbench_register.py"):
+            src_f = TOOLKIT_ROOT / "installer" / fname
+            if src_f.exists():
+                shutil.copy2(src_f, inst_dst / fname)
+        hooks_src = TOOLKIT_ROOT / "installer" / "hooks"
+        if hooks_src.exists():
+            hooks_dst = inst_dst / "hooks"
+            if hooks_dst.exists():
+                shutil.rmtree(hooks_dst)
+            shutil.copytree(hooks_src, hooks_dst)
+        done.append("workbench sync client + hooks: installed under .aicc/ai-dlc/installer/")
+    else:
+        done.append("workbench sync client + hooks: DRY-RUN would install")
     return done
+
+
+def wire_sync_hook(target: pathlib.Path, harness: str, dry_run: bool) -> str:
+    """Wire the automatic Workbench-sync hook into the engineer's harness config
+    WITHOUT overwriting their existing agents/skills/hooks/settings.
+
+    Kiro  : drop aicc-workbench-sync.kiro.hook into .kiro/hooks/ (adds one file;
+            never touches other hooks).
+    Claude: merge a single Stop hook into .claude/settings.json's hooks map
+            (preserving every existing hook and setting).
+    Idempotent: re-running does not duplicate the entry. Returns a status line.
+    """
+    hooks_dir = target / ".aicc" / "ai-dlc" / "installer" / "hooks"
+    if dry_run:
+        return "sync hook: DRY-RUN would wire into the harness config"
+
+    if harness == "kiro":
+        src = hooks_dir / "aicc-workbench-sync.kiro.hook"
+        if not src.exists():
+            return "sync hook: source hook missing (skipped)"
+        dst_dir = target / ".kiro" / "hooks"
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        dst = dst_dir / "aicc-workbench-sync.kiro.hook"
+        shutil.copy2(src, dst)   # adds/refreshes only this one hook file
+        return f"sync hook: installed {dst.relative_to(target)} (other Kiro hooks preserved)"
+
+    if harness == "claude":
+        src = hooks_dir / "aicc-workbench-sync.claude.json"
+        if not src.exists():
+            return "sync hook: source hook missing (skipped)"
+        try:
+            snippet = json.loads(src.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return "sync hook: could not read Claude hook snippet (skipped)"
+        stop_entries = (snippet.get("hooks") or {}).get("Stop") or []
+        settings_path = target / ".claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings = {}
+        if settings_path.exists():
+            try:
+                settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return "sync hook: existing .claude/settings.json is unreadable; left untouched (wire the Stop hook manually)"
+        hooks = settings.setdefault("hooks", {})
+        stop = hooks.setdefault("Stop", [])
+        marker = "installer/workbench_sync.py"
+        already = any(marker in json.dumps(e) for e in stop)
+        if not already:
+            stop.extend(stop_entries)
+            settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+            return "sync hook: merged Stop hook into .claude/settings.json (existing hooks preserved)"
+        return "sync hook: already present in .claude/settings.json (no change)"
+
+    return "sync hook: no wiring for this harness"
 
 
 def _now_iso() -> str:
@@ -340,6 +413,12 @@ def register_with_workbench(target: pathlib.Path, cfg: dict, tool: str, harness:
         "stages": result["stages"],
         "registered_at": _now_iso(),
     }
+    # Phase 3: persist the UPDATE capability (if the backend returned one) so the
+    # sync hook can push validated lifecycle updates automatically. This is a
+    # local secret — stored only in the engineer's own .aicc/config.json, never
+    # printed, never placed in the view URL, never committed by the toolkit.
+    if result.get("update_token"):
+        cfg["workbench"]["update_token"] = result["update_token"]
     save_project_config(target, cfg)
     return (wr.STATUS_REGISTERED, f"registered as project {result['project_id']}")
 
@@ -418,6 +497,9 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
                 print(f"   could not run aidlc config: {exc}", file=sys.stderr)
         else:
             print("   harness config skipped (run `aidlc config --harness %s` yourself when ready)" % harness)
+
+    # Phase 3: wire the automatic Workbench-sync hook (non-destructive).
+    print(f"   {wire_sync_hook(target, harness, dry_run)}")
 
     # Post-install validation
     val = target / ".aicc" / "ai-dlc" / "validators"

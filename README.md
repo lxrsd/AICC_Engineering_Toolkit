@@ -119,9 +119,12 @@ guarantees a person, not an AI, authorized what gets built.
 | **Tests** | The build runs and automated tests execute. |
 | **Evidence** | Traceable artifacts (paths + hashes + results) proving the run. |
 
-Each stage starts **pending**. As you complete the lifecycle and submit evidence,
-**your Workbench stages update automatically** to reflect real progress — no
-manual bookkeeping.
+Each stage starts **pending**. As you work through the lifecycle in your AI
+tool, **your Workbench stages update automatically** — the Toolkit installs a
+sync hook that pushes validated progress after each turn. There is **no manual
+evidence upload, no run id to copy, no AWS setup, and no AICC login**. A stage
+turns complete only when the backend validates genuine evidence: the human
+approval gate must be real, and failed tests never show complete.
 
 <a id="two-things-you-can-open"></a>
 ### Two things you can open — don't confuse them
