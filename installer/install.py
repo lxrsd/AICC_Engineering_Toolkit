@@ -47,6 +47,7 @@ import webbrowser
 import pathlib
 
 import workbench_register as wr
+import tls
 from workbench_endpoint import WORKBENCH_API_ENV, resolve_api
 
 TOOLKIT_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -561,7 +562,8 @@ def maybe_open_browser(url: str, open_browser: bool) -> str:
 
 def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: bool,
             allow_runtime_install: bool, force: bool, dry_run: bool,
-            workbench_api: str, api_source: str, open_browser: bool) -> int:
+            workbench_api: str, api_source: str, open_browser: bool,
+            relax_tls_keyusage: bool = False) -> int:
     reg = load_registry()
     cert = certified(reg)
     plat = detect_platform()
@@ -641,6 +643,11 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
     # Workbench registration (honest; never fabricated). The endpoint is the
     # maintained default unless overridden by --workbench-api / env.
     print(f"Workbench endpoint: {workbench_api or '(none)'} (source: {api_source})")
+    # Apply the TLS policy (full verification always; opt-in Key Usage relax).
+    wr.set_tls_policy(relax_tls_keyusage)
+    if relax_tls_keyusage:
+        print("Workbench TLS: strict X.509 Key Usage check RELAXED by request "
+              "(chain + hostname verification remain enforced).")
     wb_status, wb_msg = register_with_workbench(target, cfg, tool, harness,
                                                 workbench_api, api_source, dry_run)
     print(f"Workbench registration: {wb_status} — {wb_msg}")
@@ -704,6 +711,11 @@ def main(argv: list[str]) -> int:
                          f"(else ${WORKBENCH_API_ENV}, else the maintained default endpoint).")
     ap.add_argument("--no-browser", action="store_true",
                     help="do not open the Workbench URL in a browser (headless / automation)")
+    ap.add_argument("--allow-legacy-tls-keyusage", action="store_true", default=None,
+                    help="opt-in: behind a corporate SSL-inspection proxy whose root CA lacks the "
+                         "X.509 Key Usage extension, relax ONLY that strict check (chain + hostname "
+                         f"verification stay enforced). Off by default; env ${tls.RELAX_KEYUSAGE_ENV}=1 "
+                         "also enables it. Prefer having IT re-issue the CA.")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
@@ -727,8 +739,11 @@ def main(argv: list[str]) -> int:
     workbench_api, api_source = resolve_api(args.workbench_api)
     # Browser opening is suppressed for headless/automation modes.
     open_browser = not (args.no_browser or args.non_interactive or args.dry_run)
+    # TLS policy: resolve the opt-in Key Usage relaxation (flag > env > off).
+    relax_tls = tls.relax_requested(args.allow_legacy_tls_keyusage)
     return install(tool, target, args.yes, args.non_interactive, args.allow_runtime_install,
-                   args.force, args.dry_run, workbench_api, api_source, open_browser)
+                   args.force, args.dry_run, workbench_api, api_source, open_browser,
+                   relax_tls_keyusage=relax_tls)
 
 
 if __name__ == "__main__":

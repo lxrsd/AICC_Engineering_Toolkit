@@ -34,9 +34,12 @@ import json
 import os
 import pathlib
 import re
+import ssl
 import sys
 import urllib.request
 import urllib.error
+
+import tls
 
 HERE = pathlib.Path(__file__).resolve().parent
 TOOLKIT_ROOT = HERE.parent
@@ -73,6 +76,16 @@ NO_REGISTRATION = "NO_REGISTRATION"   # project not registered yet (run install)
 NO_EVIDENCE = "NO_EVIDENCE"           # no exported manifest to sync yet
 NOT_CONNECTED = "NOT_CONNECTED"       # backend unavailable / not deployed
 FAILED = "FAILED"                     # reached but rejected / malformed
+
+# TLS policy (opt-in relaxation of ONLY the strict Key Usage flag; off by
+# default) and the last TLS diagnostic captured by _post for surfacing.
+_RELAX_KEYUSAGE = False
+_LAST_TLS_DIAG = None
+
+
+def set_tls_policy(relax_keyusage: bool) -> None:
+    global _RELAX_KEYUSAGE
+    _RELAX_KEYUSAGE = bool(relax_keyusage)
 
 
 class SyncResult:
@@ -140,19 +153,29 @@ def _sanitize_and_validate(manifest: dict) -> dict:
 
 
 def _post(url: str, body: dict) -> tuple[int, dict]:
+    global _LAST_TLS_DIAG
+    _LAST_TLS_DIAG = None
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("accept", "application/json")
     req.add_header("content-type", "application/json")
+    ctx = tls.build_ssl_context(relax_keyusage=_RELAX_KEYUSAGE)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as r:
             return r.status, json.loads(r.read(MAX_BYTES + 1).decode("utf-8") or "{}")
     except urllib.error.HTTPError as e:
         try:
             return e.code, json.loads(e.read().decode("utf-8") or "{}")
         except Exception:
             return e.code, {"error": e.reason}
-    except urllib.error.URLError:
+    except urllib.error.URLError as e:
+        # Record a precise TLS/connection diagnostic for sync() to surface. Stays
+        # non-fatal (status 0) so the hook never breaks the engineer's lifecycle.
+        reason = e.reason if isinstance(e.reason, BaseException) else e
+        _LAST_TLS_DIAG = tls.diagnose_tls_error(reason)
+        return 0, {}
+    except ssl.SSLError as e:
+        _LAST_TLS_DIAG = tls.diagnose_tls_error(e)
         return 0, {}
     except json.JSONDecodeError:
         return -1, {}
@@ -193,6 +216,9 @@ def sync(target: pathlib.Path, evidence: str | None = None, api_override: str | 
                           f"Workbench update endpoint not available yet (HTTP {status}); "
                           "it ships in the private AICC_Unified backend.")
     if status == 0:
+        if _LAST_TLS_DIAG is not None:
+            code, detail = _LAST_TLS_DIAG
+            return SyncResult(NOT_CONNECTED, f"[{code}] {detail}")
         return SyncResult(NOT_CONNECTED, f"could not reach the Workbench at {api}.")
     if status == 200 and isinstance(payload, dict) and payload.get("stages"):
         return SyncResult(SYNCED, f"synchronized project {project_id}", payload["stages"])
@@ -205,9 +231,14 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--target", default=".", help="project directory (default: current dir)")
     ap.add_argument("--evidence", default=None, help="explicit path to the exported evidence-manifest.json")
     ap.add_argument("--api", default=None, help="override the Workbench API base URL")
+    ap.add_argument("--allow-legacy-tls-keyusage", action="store_true", default=None,
+                    help="opt-in: relax ONLY the strict X.509 Key Usage rule for a non-compliant "
+                         "corporate proxy CA (chain + hostname verification stay on). Off by default; "
+                         f"env ${tls.RELAX_KEYUSAGE_ENV}=1 also enables it.")
     ap.add_argument("--quiet", action="store_true", help="only print on a real change/error")
     args = ap.parse_args(argv)
 
+    set_tls_policy(tls.relax_requested(args.allow_legacy_tls_keyusage))
     result = sync(pathlib.Path(args.target).resolve(), args.evidence, args.api)
 
     # Non-fatal always: the hook must never break the engineer's lifecycle.

@@ -26,14 +26,26 @@ import argparse
 import json
 import pathlib
 import re
+import ssl
 import sys
 import urllib.request
 import urllib.error
+
+import tls
 
 HERE = pathlib.Path(__file__).resolve().parent
 VALIDATORS = HERE.parent / "capabilities" / "ai-dlc" / "validators"
 SCHEMA = VALIDATORS / "schema" / "evidence-manifest.schema.json"
 sys.path.insert(0, str(VALIDATORS / "exporter"))
+
+# TLS policy: full verification + strict X.509 on by default. Opt-in relaxation
+# of ONLY the Key Usage rule via set_tls_policy(); never disables verification.
+_RELAX_KEYUSAGE = False
+
+
+def set_tls_policy(relax_keyusage: bool) -> None:
+    global _RELAX_KEYUSAGE
+    _RELAX_KEYUSAGE = bool(relax_keyusage)
 
 SUPPORTED_TOOLS = {"kiro-cli", "claude-code"}
 MAX_BYTES = 512 * 1024
@@ -105,8 +117,9 @@ def _request(method: str, url: str, body: dict | None):
     req.add_header("accept", "application/json")
     if body is not None:
         req.add_header("content-type", "application/json")
+    ctx = tls.build_ssl_context(relax_keyusage=_RELAX_KEYUSAGE)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as r:
             return r.status, json.loads(r.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as e:
         try:
@@ -115,7 +128,14 @@ def _request(method: str, url: str, body: dict | None):
             payload = {"error": e.reason}
         return e.code, payload
     except urllib.error.URLError as e:
+        reason = e.reason if isinstance(e.reason, BaseException) else e
+        code, detail = tls.diagnose_tls_error(reason)
+        if code != tls.TLS_PROXY_NETWORK:
+            raise SubmitError(f"TLS verification problem reaching {url} [{code}]: {detail}")
         raise SubmitError(f"network error reaching {url}: {e.reason}")
+    except ssl.SSLError as e:
+        code, detail = tls.diagnose_tls_error(e)
+        raise SubmitError(f"TLS problem reaching {url} [{code}]: {detail}")
 
 
 def submit(api: str, project: str, manifest: dict) -> dict:

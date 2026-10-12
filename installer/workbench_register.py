@@ -57,10 +57,23 @@ Stdlib only.
 from __future__ import annotations
 
 import json
+import ssl
 import urllib.request
 import urllib.error
 
+import tls
+
 REGISTER_PATH = "/api/engineer-projects"
+
+# TLS policy for all requests from this client. Default: full verification with
+# strict X.509 ON. The installer may flip relax_keyusage (opt-in only) via
+# set_tls_policy(); it NEVER disables chain/hostname verification.
+_RELAX_KEYUSAGE = False
+
+
+def set_tls_policy(relax_keyusage: bool) -> None:
+    global _RELAX_KEYUSAGE
+    _RELAX_KEYUSAGE = bool(relax_keyusage)
 
 # The six AI-DLC lifecycle stages, in order. The server initializes each as
 # pending; the client verifies the server returned exactly these, all pending.
@@ -94,8 +107,9 @@ def _request(method: str, url: str, body: dict | None):
     req.add_header("accept", "application/json")
     if body is not None:
         req.add_header("content-type", "application/json")
+    ctx = tls.build_ssl_context(relax_keyusage=_RELAX_KEYUSAGE)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as r:
             raw = r.read(MAX_RESPONSE_BYTES + 1)
             if len(raw) > MAX_RESPONSE_BYTES:
                 raise RegisterError("registration response too large", STATUS_FAILED)
@@ -107,8 +121,19 @@ def _request(method: str, url: str, body: dict | None):
             payload = {"error": e.reason}
         return e.code, payload
     except urllib.error.URLError as e:
-        # Network-level failure: the backend is unreachable. Honest, not fatal.
+        # Network-level failure, which includes TLS verification errors (the
+        # SSLCertVerificationError is wrapped as URLError.reason). Classify it so
+        # the engineer gets a precise cause + IT remediation, never a fabricated
+        # success. Verification was NOT weakened to get here.
+        code, detail = tls.diagnose_tls_error(e.reason if isinstance(e.reason, BaseException) else e)
+        if code != tls.TLS_PROXY_NETWORK:
+            raise RegisterError(f"TLS verification problem reaching the Workbench [{code}]: {detail}",
+                                STATUS_NOT_CONNECTED)
         raise RegisterError(f"cannot reach Workbench at {url}: {e.reason}",
+                            STATUS_NOT_CONNECTED)
+    except ssl.SSLError as e:
+        code, detail = tls.diagnose_tls_error(e)
+        raise RegisterError(f"TLS problem reaching the Workbench [{code}]: {detail}",
                             STATUS_NOT_CONNECTED)
     except json.JSONDecodeError as e:
         raise RegisterError(f"Workbench returned a non-JSON response: {e}", STATUS_FAILED)
