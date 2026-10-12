@@ -44,6 +44,8 @@ from __future__ import annotations
 import pathlib
 import subprocess
 
+import harness_registry as hreg
+
 # Managed-block sentinels. We only ever touch text BETWEEN these markers, so an
 # engineer's own instructions in the same file are preserved on re-run.
 BEGIN = "<!-- BEGIN AICC AI-DLC (managed; edit outside this block) -->"
@@ -149,16 +151,30 @@ def _write_managed(path: pathlib.Path, block: str, dry_run: bool) -> str:
 
 
 def write_activation_instructions(target: pathlib.Path, harness: str, dry_run: bool) -> list[str]:
-    """Author the tool-neutral AGENTS.md plus the discovery pointers each tool
-    needs, non-destructively. Returns status lines.
+    """Author the shared, tool-neutral AICC activation layer, non-destructively.
+    Returns status lines.
 
-    - AGENTS.md: always (the single source of truth).
-    - CLAUDE.md: always a thin pointer — Claude loads CLAUDE.md every session,
-      and when a CLAUDE.md exists Claude does NOT auto-fall back to AGENTS.md, so
-      the pointer guarantees Claude still loads the activation rule. Written for
-      BOTH harnesses so a later switch to Claude already has it.
-    - .kiro/steering/aicc-ai-dlc.md: a Kiro steering pointer (always-included),
-      written for both harnesses for the same forward-compatible reason.
+    Per the official upstream guide, the RUNTIME writes each harness's native
+    onboarding file (.claude/CLAUDE.md, .kiro/steering/aidlc-onboarding.md,
+    .codex/onboarding.md, .cursor/rules/aidlc-onboarding.mdc, .aidlc/onboarding.md,
+    and Copilot's root AGENTS.md). The Toolkit adds only the MINIMAL shared
+    activation layer so every tool discovers that a build request must start the
+    governed AI-DLC workflow:
+
+      - AGENTS.md: the single tool-neutral source of truth. Kiro, Kiro IDE,
+        Codex, Cursor, opencode, and Copilot all read a root AGENTS.md surface,
+        so this one file covers them. (For Copilot, AGENTS.md IS the onboarding
+        surface; our managed block coexists with the runtime's content via the
+        sentinel markers.)
+      - CLAUDE.md: a thin pointer to AGENTS.md. Claude loads CLAUDE.md every
+        session and does NOT auto-fall back to AGENTS.md when a CLAUDE.md exists,
+        so the pointer guarantees Claude still loads the activation rule.
+      - .kiro/steering/aicc-ai-dlc.md: an always-included Kiro steering pointer
+        (helps Kiro CLI and Kiro IDE discover AGENTS.md).
+
+    The CLAUDE.md and Kiro pointers are written regardless of the selected
+    harness so that switching to Claude/Kiro later already has discovery wired.
+    All writes are idempotent and preserve the engineer's own content.
     """
     lines = []
     lines.append(_write_managed(target / "AGENTS.md", AGENTS_BLOCK, dry_run))
@@ -172,40 +188,46 @@ def write_activation_instructions(target: pathlib.Path, harness: str, dry_run: b
 # Engine configuration + verification (official runtime; version-aware)
 # ---------------------------------------------------------------------------
 
-# The project-local engine surface each harness produces. Presence of one of
-# these (beyond our own files) is how we VERIFY the runtime actually configured
-# the harness — rather than trusting an exit code from a possibly no-op flag.
-HARNESS_SURFACE = {
-    "claude": [".claude"],
-    "kiro": [".kiro"],
+# Files the Toolkit itself writes (NOT runtime engine surfaces). These must be
+# excluded when verifying that the official runtime actually configured a
+# harness, so we never mistake our own activation pointers for an engine.
+_TOOLKIT_WRITTEN = {
+    "AGENTS.md", "CLAUDE.md",
+    str(pathlib.Path(".kiro") / "steering" / "aicc-ai-dlc.md"),
 }
 
 
 def _harness_configured(target: pathlib.Path, harness: str) -> bool:
-    """True if the runtime's engine surface for `harness` exists in the project.
+    """True if the OFFICIAL runtime's engine surface for `harness` exists in the
+    project, per the central registry — excluding files the Toolkit itself
+    writes. This is the honest verification: an exit code is not proof.
 
-    For Kiro we require more than the bare .kiro/steering pointer this module
-    writes: an engine surface means hooks/agents/settings the runtime generates.
+    Special cases from upstream:
+      - Copilot's onboarding IS the root AGENTS.md, but AGENTS.md is also written
+        by the Toolkit, so AGENTS.md alone does NOT prove Copilot's engine; we
+        require a .github engine artifact.
+      - Kiro's bare steering pointer (which the Toolkit writes) does not count;
+        a real engine artifact (hooks/agents/settings or a runtime-written
+        steering file other than ours) is required.
     """
-    if harness == "kiro":
-        kiro = target / ".kiro"
-        if not kiro.is_dir():
-            return False
-        # Our steering pointer alone is not an engine. Require some other Kiro
-        # engine artifact (hooks/agents/settings/specs) to call it configured.
-        engine_markers = ["hooks", "agents", "settings", "settings.json", "specs", "steering/aidlc"]
-        for m in engine_markers:
-            if (kiro / m).exists():
-                return True
-        # steering dir with files other than our single pointer also counts.
-        steering = kiro / "steering"
-        if steering.is_dir():
-            others = [p for p in steering.iterdir() if p.name != "aicc-ai-dlc.md"]
-            if others:
-                return True
+    h = hreg.resolve(harness)
+    if not h:
         return False
-    if harness == "claude":
-        return (target / ".claude").is_dir()
+    for marker in h.engine_markers:
+        p = target / marker
+        rel = str(pathlib.Path(marker))
+        if rel in _TOOLKIT_WRITTEN:
+            continue  # our own file, not an engine proof
+        if p.exists():
+            # A marker that is a directory the Toolkit may have created but left
+            # empty (e.g. .kiro/steering holding only our pointer) is not proof.
+            if p.is_dir():
+                contents = [c for c in p.iterdir()
+                            if str(pathlib.Path(marker) / c.name) not in _TOOLKIT_WRITTEN]
+                if contents:
+                    return True
+                continue
+            return True
     return False
 
 
@@ -228,13 +250,13 @@ def configure_harness(aidlc_exe: str, target: pathlib.Path, harness: str,
     if _harness_configured(target, harness):
         return (True, f"'{harness}' harness already configured (verified engine surface present)")
 
-    # Candidate non-interactive invocations across runtime versions. Each is the
-    # OFFICIAL cli; we do not reimplement it. Unknown flags on older versions are
-    # harmless (ignored) — we rely on surface verification, not exit codes.
+    # The OFFICIAL selector is `aidlc config --harness <id>` (upstream guide).
+    # We keep a couple of fallbacks for older/newer CLIs; unknown flags are
+    # harmless (ignored) because we rely on surface VERIFICATION, not exit codes.
     attempts = [
         [aidlc_exe, "config", "--harness", harness, "--yes"],
-        [aidlc_exe, "config", "harness", harness, "--yes"],
         [aidlc_exe, "config", "--harness", harness, "--non-interactive"],
+        [aidlc_exe, "config", "--harness", harness],
     ]
     last_detail = ""
     for cmd in attempts:

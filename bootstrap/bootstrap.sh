@@ -27,12 +27,16 @@
 # (those live only inside install.py's project config).
 #
 # Usage:
-#   bootstrap.sh [--target <dir>] [--tool claude-code|kiro-cli]
+#   bootstrap.sh [--target <dir>] [--harness <id>] [--tool <legacy-id>]
 #                [--yes] [--no-browser] [--ref <git-tag>] [--sha256 <digest>]
 #                [--dry-run] [--help]
 #
+# Harness ids (official AWS Labs AI-DLC): claude, kiro, kiro-ide, codex, cursor,
+# opencode, copilot. --tool accepts the legacy claude-code|kiro-cli aliases.
+# If omitted, install.py detects an installed tool or prompts.
+#
 # Non-interactive automation: pass --yes (consents to prerequisite installs) and
-# --tool. --dry-run prints the plan and changes nothing.
+# --harness. --dry-run prints the plan and changes nothing.
 set -euo pipefail
 
 # --------------------------------------------------------------------------
@@ -46,6 +50,7 @@ MIN_PY_MINOR=9   # require Python 3.9+
 
 TARGET=""
 TOOL=""
+HARNESS=""
 ASSUME_YES=0
 NO_BROWSER=0
 DRY_RUN=0
@@ -88,6 +93,7 @@ run() {
 while [ $# -gt 0 ]; do
   case "$1" in
     --target) TARGET="${2:-}"; shift 2;;
+    --harness) HARNESS="${2:-}"; shift 2;;
     --tool) TOOL="${2:-}"; shift 2;;
     --yes|-y) ASSUME_YES=1; shift;;
     --no-browser) NO_BROWSER=1; shift;;
@@ -262,6 +268,7 @@ fi
 INSTALL_ARGS=( "$TOOLKIT_DIR/installer/install.py" --target "$TARGET" )
 # The installer may install the runtime with its own explicit consent prompt.
 INSTALL_ARGS+=( --allow-runtime-install )
+[ -n "$HARNESS" ] && INSTALL_ARGS+=( --harness "$HARNESS" )
 [ -n "$TOOL" ] && INSTALL_ARGS+=( --tool "$TOOL" )
 [ "$ASSUME_YES" -eq 1 ] && INSTALL_ARGS+=( --yes )
 [ "$NO_BROWSER" -eq 1 ] && INSTALL_ARGS+=( --no-browser )
