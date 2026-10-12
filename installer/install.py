@@ -16,6 +16,10 @@ What it does, in order:
      engineer's project.
   5. Apply the AICC methodology/adapter/validators/templates (AICC-namespaced,
      non-destructive).
+  5b. Write tool-neutral AI-DLC activation instructions (AGENTS.md + a thin
+     CLAUDE.md pointer + a Kiro steering pointer) so BOTH tools auto-discover
+     that a build request must start the governed workflow, and VERIFY the
+     selected harness's engine surface was actually configured by the runtime.
   6. Verify genuine human Plan Approval enforcement is wired, run post-install
      validation, and report READY or BLOCKED with actionable detail.
 
@@ -48,6 +52,7 @@ import pathlib
 
 import workbench_register as wr
 import tls
+import aidlc_activation
 from workbench_endpoint import WORKBENCH_API_ENV, resolve_api
 
 TOOLKIT_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -601,26 +606,42 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
     for line in apply_aicc_standard(target, tool, force, dry_run):
         print(f"   {line}")
 
-    # Harness config via the runtime (only if runtime ready and not dry-run)
     harness = TOOL_HARNESS[tool]
+
+    # AI-DLC activation instructions: tool-neutral AGENTS.md + a thin CLAUDE.md
+    # pointer + a Kiro steering pointer, so BOTH tools auto-discover that a build
+    # request must start the governed AI-DLC workflow. Non-destructive; it never
+    # copies the methodology. Written independently of the runtime and of
+    # Workbench, so a build request activates AI-DLC even if those are absent.
+    print("Writing AI-DLC activation instructions (AGENTS.md / CLAUDE.md / Kiro steering):")
+    for line in aidlc_activation.write_activation_instructions(target, harness, dry_run):
+        print(f"   {line}")
+
+    # Harness engine config via the OFFICIAL runtime (only if runtime ready and
+    # not dry-run). Version-aware + VERIFIED: we confirm the engine surface
+    # (.claude/ or .kiro/) actually exists before reporting it wired. This runs
+    # BEFORE any Workbench step, so registration/TLS problems can never block it.
     harness_wired = False
-    # Use the resolved runtime exe (handles the case where PATH is not refreshed
-    # in this process yet), falling back to a bare "aidlc" on PATH.
+    harness_msg = "skipped"
+    # Use the resolved runtime exe (handles PATH-not-refreshed), falling back to
+    # a bare "aidlc" on PATH.
     aidlc_exe = rt_exe or find_runtime_exe() or "aidlc"
-    if rt_ready and not dry_run:
-        if confirm(f"Run `aidlc config --harness {harness}` in {target}? (preserves existing files; shows a plan)",
+    if dry_run:
+        harness_msg = aidlc_activation.configure_harness(aidlc_exe, target, harness, dry_run=True)[1]
+        print(f"   {harness_msg}")
+    elif rt_ready:
+        if confirm(f"Configure the official AI-DLC '{harness}' harness in {target}? "
+                   "(preserves existing files; verifies the engine surface)",
                    assume_yes, non_interactive):
-            try:
-                r = subprocess.run([aidlc_exe, "config", "--harness", harness, "--yes"],
-                                   cwd=str(target), capture_output=True, text=True, timeout=180)
-                print((r.stdout or "")[:1000])
-                harness_wired = r.returncode == 0
-                if r.returncode != 0:
-                    print(f"   aidlc config exited {r.returncode}: {(r.stderr or '')[:300]}", file=sys.stderr)
-            except Exception as exc:
-                print(f"   could not run aidlc config: {exc}", file=sys.stderr)
+            harness_wired, harness_msg = aidlc_activation.configure_harness(
+                aidlc_exe, target, harness, dry_run=False)
+            print(f"   {harness_msg}")
         else:
-            print("   harness config skipped (run `aidlc config --harness %s` yourself when ready)" % harness)
+            harness_msg = "declined; run `aidlc config` yourself and choose the %s harness" % harness
+            print(f"   harness config {harness_msg}")
+    else:
+        harness_msg = "runtime not ready; configure the harness after the runtime is installed"
+        print(f"   {harness_msg}")
 
     # Phase 3: wire the automatic Workbench-sync hook (non-destructive).
     print(f"   {wire_sync_hook(target, harness, dry_run)}")
@@ -676,7 +697,11 @@ def install(tool: str, target: pathlib.Path, assume_yes: bool, non_interactive: 
     print(f"  Tool:              {tool} (CERTIFIED{' — ' + cert[tool]['qualification'] if cert[tool].get('qualification') else ''})")
     print(f"  Platform:          {plat['os']}/{plat['arch']}")
     print(f"  Runtime:           {'ready' if rt_ready else 'NOT ready — ' + rt_msg.splitlines()[0]}")
-    print(f"  Harness wired:     {'yes' if harness_wired else 'no (needs runtime + aidlc config)'}")
+    print(f"  AI-DLC harness:    {harness} — {'CONFIGURED (engine surface verified)' if harness_wired else 'NOT confirmed'}")
+    if not harness_wired and not dry_run:
+        print(f"                     {harness_msg}")
+    print(f"  AI-DLC activation: AGENTS.md + CLAUDE.md + Kiro steering written — a 'build ...' request")
+    print(f"                     starts the governed workflow (requirements + human approval) in either tool")
     print(f"  AICC standard:     installed under {target}/.aicc/ai-dlc/")
     print(f"  Approval control:  genuine human Plan Approval is enforced by the runtime's prompt-submit hook")
     print(f"                     (verify: `aidlc doctor`, and `preflight.py --tool {tool} --require-human-turn`)")

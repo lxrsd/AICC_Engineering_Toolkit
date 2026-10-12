@@ -331,12 +331,16 @@ class DryRunAndPaths(unittest.TestCase):
             (target / ".claude" / "settings.json").write_text(
                 json.dumps({"hooks": {"Stop": [{"keep": "me"}]}, "custom": 1}), encoding="utf-8")
             _run_install(target)
-            # The engineer's files survive untouched.
+            # The engineer's hooks + settings survive untouched.
             self.assertEqual((target / ".kiro" / "hooks" / "my.kiro.hook").read_text(), "ENGINEER HOOK")
-            self.assertEqual((target / "CLAUDE.md").read_text(), "ENGINEER INSTRUCTIONS")
             settings = json.loads((target / ".claude" / "settings.json").read_text())
             self.assertEqual(settings["custom"], 1)
             self.assertIn({"keep": "me"}, settings["hooks"]["Stop"])
+            # CLAUDE.md: the engineer's content is PRESERVED and the AI-DLC
+            # activation pointer is appended (non-destructive merge, not a clobber).
+            claude = (target / "CLAUDE.md").read_text()
+            self.assertIn("ENGINEER INSTRUCTIONS", claude)
+            self.assertIn("AGENTS.md", claude)
         finally:
             wr._request = orig_req
 
