@@ -1,0 +1,16 @@
+{
+  "_comment": "AICC Workbench auto-sync hook for Claude Code. MERGE this entry into the project's .claude/settings.json 'hooks' map (do NOT overwrite the file). It runs after Claude finishes responding, pushing validated AI-DLC lifecycle progress to this project's AICC Workbench. Non-fatal and quiet: it never blocks the session and never fabricates progress. No manual evidence upload, no run id, no login.",
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .aicc/ai-dlc/installer/workbench_sync.py --target . --quiet || true"
+          }
+        ]
+      }
+    ]
+  }
+}

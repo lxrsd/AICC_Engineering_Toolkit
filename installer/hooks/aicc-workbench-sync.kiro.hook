@@ -1,0 +1,11 @@
+{
+  "version": "1.0.0",
+  "enabled": true,
+  "name": "aicc-workbench-sync",
+  "description": "After each turn, automatically synchronize validated AI-DLC lifecycle progress to this project's AICC Workbench. No manual evidence upload, no run id, no login. Non-fatal and quiet: it never blocks the lifecycle and never fabricates progress.",
+  "when": { "type": "stop" },
+  "then": {
+    "type": "runCommand",
+    "command": "python3 .aicc/ai-dlc/installer/workbench_sync.py --target . --quiet || true"
+  }
+}

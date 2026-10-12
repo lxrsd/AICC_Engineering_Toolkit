@@ -150,11 +150,21 @@ def _validate_success_payload(payload: dict) -> dict:
             f"registration returned stages {slugs}, expected exactly {list(EXPECTED_STAGES)} (all pending)",
             STATUS_FAILED)
 
-    return {
+    result = {
         "project_id": project_id,
         "workbench_url": workbench_url,
         "stages": [{"slug": s["slug"], "status": "pending"} for s in stages],
     }
+    # Phase 3 (optional, backward-compatible): the backend also returns an
+    # update_token — the separate capability that authorizes pushing validated
+    # lifecycle updates for THIS project. It is NOT part of the pinned view
+    # contract and must never appear in the view URL; the installer stores it
+    # privately so the sync hook can submit progress automatically. Older
+    # backends omit it and registration still succeeds.
+    update_token = payload.get("update_token")
+    if isinstance(update_token, str) and update_token.strip():
+        result["update_token"] = update_token
+    return result
 
 
 def register_project(api: str, local_project_id: str, tool: str, harness: str) -> dict:
