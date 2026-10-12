@@ -140,8 +140,7 @@ harness's configuration is left intact.
 
 Useful flags (all real): `--dry-run` (preview, change nothing), `--force`
 (refresh the AICC standard), `--non-interactive` + `--yes` (automation),
-`--list` / `--list-harnesses`. **No AWS flags are needed** — see
-[Workbench is optional](#workbench-is-optional).
+`--list` / `--list-harnesses`. **No AWS account or AWS connectivity is required.**
 
 ---
 
@@ -176,26 +175,41 @@ certified harnesses, code generation is blocked until you do.
 
 Your source code and AI-DLC artifacts are **yours** and live in **your** project
 folder. Commit them to **your own** GitHub repository — nothing here depends on
-AWS:
+AWS.
+
+Before you commit, take a minute to make sure nothing sensitive goes in. Run
+these in your project folder, in order:
 
 ```bash
 cd /path/to/your/project
-git init                     # if the project isn't a repo yet
-git add .
+
+# 1. Make sure a .gitignore exists and lists secrets/local files to skip.
+#    Open .gitignore and review it (e.g. .env, credentials, local config).
+cat .gitignore
+
+# 2. Run the validators — they flag sensitive files and check your evidence.
+python3 .aicc/ai-dlc/validators/check_sensitive_files.py --repo-root .
+python3 .aicc/ai-dlc/validators/exporter/validate_evidence.py evidence-manifest.json --repo-root . --check-artifacts
+
+# 3. See what git would include.
+git status
+
+# 4. Stage your files (prefer naming them over "git add .").
+git add <files you want to commit>
+
+# 5. Review exactly what you staged — read it before committing.
+git diff --cached
+
+# 6. Commit and push to YOUR repository.
+git init                     # only if the project isn't a repo yet
 git commit -m "AI-DLC: requirements, design, code, tests, evidence"
 git branch -M main
 git remote add origin https://github.com/<you>/<your-project>.git
 git push -u origin main
 ```
 
-Validate your sanitized evidence any time (local, no AWS):
-
-```bash
-python3 .aicc/ai-dlc/validators/exporter/validate_evidence.py evidence-manifest.json --repo-root . --check-artifacts
-python3 .aicc/ai-dlc/validators/check_sensitive_files.py --repo-root .
-```
-
-> **No AWS Workbench account, registration, or synchronization is required.**
+If a validator reports a problem, fix it before staging — don't commit until
+`git diff --cached` shows only what you intend to publish.
 
 ---
 
@@ -253,18 +267,10 @@ python3 .aicc/ai-dlc/validators/preflight.py --tool <harness> --require-human-tu
 
 ---
 
-<a id="workbench-is-optional"></a>
-## Workbench is optional (not needed to build)
+## No AWS required
 
-Local AI-DLC is complete without AWS. There is **no Workbench setup, account,
-registration, or synchronization in the engineer workflow** — Steps 1–5 need no
-AWS connectivity at all.
-
-The AICC team maintains a live Workbench that showcases AICC's **own previously
-certified** Kiro CLI and Claude Code runs. It is a **demonstration of AICC's
-proof**, not something engineers set up or register with:
-
-**→ View the certified demonstration: <https://main.d1p32afqqmff9l.amplifyapp.com/>**
+Local AI-DLC is complete without AWS. **No AWS account or AWS connectivity is
+required** at any step — the full lifecycle runs locally in your tool.
 
 ---
 
@@ -276,10 +282,10 @@ One-time, per machine (reused by every project):
 - **Your AI tool** — installed by you or via IT approval.
 - **Python 3.9+** — for the installer and validators.
 - Supported OS/CPU per the AWS Labs runtime: macOS (arm64/x64), Linux
-  (arm64/x64), Windows (x64). On Windows use PowerShell, or WSL2 with the macOS
-  command.
+  (arm64/x64), Windows (x64). On Windows use PowerShell, or WSL2 with the Linux
+  installation instructions.
 
-**Not required:** an AWS account or Workbench connectivity.
+**Not required:** an AWS account or AWS connectivity.
 
 ---
 
